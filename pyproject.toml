@@ -1,0 +1,39 @@
+[project]
+name = "state-squares"
+version = "0.1.0"
+description = "Largest squares that fit inside each US state"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Michael Gebis" }]
+requires-python = ">=3.12"
+# Keep in sync with the inline script metadata at the top of main.py.
+dependencies = [
+    "matplotlib>=3.9",
+    "numpy>=2.0",
+    "pillow>=10",
+    "pyproj>=3.6",
+    "pyshp>=2.3",
+    "shapely>=2.0",
+]
+
+[dependency-groups]
+dev = [
+    "mypy>=1.13",
+    "pytest>=8",
+    "types-shapely",
+]
+
+[tool.uv]
+package = false
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+markers = [
+    "slow: uses the real Census boundaries (downloaded on first use) and takes a while",
+]
+
+[tool.mypy]
+strict = true
+files = ["main.py", "squares", "tests"]

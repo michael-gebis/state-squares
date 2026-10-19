@@ -1,0 +1,12 @@
+# Census boundary files, downloaded automatically on first run
+data/
+
+# Generated maps, PDFs and CSVs (rebuild with `uv run main.py ...`)
+out/
+
+# Python environment and caches
+.venv/
+__pycache__/
+*.pyc
+.mypy_cache/
+.pytest_cache/
