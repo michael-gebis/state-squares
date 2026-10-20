@@ -8,6 +8,9 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+import matplotlib.pyplot as plt
+import numpy as np
+import numpy.typing as npt
 import pytest
 import shapely
 from matplotlib.axes import Axes
@@ -18,7 +21,7 @@ from matplotlib.text import Text
 from PIL import Image
 from shapely.geometry.base import BaseGeometry
 
-from squares import aligned, draw
+from squares import aligned, draw, rotated
 from squares.data import State
 from tests.helpers import SYNTHETIC_STATES, rectangle, state
 
@@ -103,7 +106,7 @@ def test_flip_video_meets_the_threads_requirements(tmp_path: Path,
     per frame per cycle, has an AAC track, and has its index at the front.
 
     (The duration is checked loosely: the AAC encoder's 21 ms lead-in makes the
-    first frame show slightly longer; see draw_flip_video.)"""
+    first frame show slightly longer; see _save_video.)"""
     assert FFMPEG is not None and FFPROBE is not None
     path: Path = draw.draw_flip_video(items, grown(items, "WI", 9.0), SYNTHETIC_STATES,
                                       tmp_path / "flip.mp4", FLIP_TEXT, cycles=2, ffmpeg=FFMPEG)
@@ -138,6 +141,63 @@ def test_flip_frames_note_the_gains(items: list[draw.Placed]) -> None:
     assert sum(t.startswith("+") for t in texts) == 1
     dashed: int = sum(1 for line in fig.findobj(Line2D) if line.get_linestyle() == "--")
     assert dashed == len(items)
+
+
+def square_placed(st: State, theta: float, half_side: float) -> draw.Placed:
+    """A true square in the middle of a made-up state, packaged for drawing,
+    with one made-up border contact."""
+    sq: rotated.Square = rotated.Square(-90.0, 44.5, theta, half_side)
+    return draw.Placed(st, sq.ring(), (sq.lon, sq.lat), float(sq.sides_mi().mean()),
+                       np.array([[-90.0, 46.0]]), [], [])
+
+
+@pytest.fixture(scope="module")
+def versions() -> tuple[draw.Placed, draw.Placed]:
+    """A north-facing square in Wisconsin and a slightly bigger, turned one."""
+    wi: State = SYNTHETIC_STATES[0]
+    return square_placed(wi, 0.0, 150_000.0), square_placed(wi, 0.05, 152_000.0)
+
+
+CLOSEUP_TEXT: draw.FlipText = draw.FlipText("Title", "Before", "After", "Legend",
+                                            "First note", "Second note")
+
+
+def test_closeup_frames_highlight_the_version_shown(
+        versions: tuple[draw.Placed, draw.Placed]) -> None:
+    """Each frame has both versions' numbers, the shown one in full color and
+    the other faded, plus the other square as a dashed outline; the gain
+    appears in both frames (alongside the numbers), and in the square only
+    on the second."""
+    first, second = versions
+    gain: str = f"{round(second.side_mi, 1) - round(first.side_mi, 1):+.1f}"
+    for shown in (0, 1):
+        fig: Figure = draw._closeup_figure(first, second, shown, SYNTHETIC_STATES, CLOSEUP_TEXT)
+        panel: dict[str, Text] = {t.get_text(): t for t in fig.texts}  # not the map's
+        for i, it in enumerate(versions):
+            color: str = draw.SQUARE_EDGE if i == shown else draw.FADED
+            assert to_rgb(panel[f"{it.side_mi:.1f} mi"].get_color()) == to_rgb(color)
+        assert {"First note", "Second note", "Legend", "Title"} <= set(panel)
+        texts: list[str] = [t.strip() for t in all_text(fig)]
+        assert f"{gain} mi" in texts
+        assert (gain in texts) == (shown == 1)
+        dashed: int = sum(1 for line in fig.findobj(Line2D) if line.get_linestyle() == "--")
+        assert dashed == 1
+        plt.close(fig)
+
+
+def test_closeup_gif_has_two_frames(tmp_path: Path,
+                                    versions: tuple[draw.Placed, draw.Placed]) -> None:
+    """The close-up GIF is 1600x900 and flips between two different frames."""
+    path: Path = draw.draw_closeup_gif(*versions, SYNTHETIC_STATES, tmp_path / "closeup.gif",
+                                       CLOSEUP_TEXT)
+    with Image.open(path) as im:
+        assert im.size == (1600, 900)
+        assert getattr(im, "n_frames", 1) == 2
+        frames: list[npt.NDArray[np.uint8]] = []
+        for frame in range(2):
+            im.seek(frame)
+            frames.append(np.asarray(im.convert("RGB")))
+    assert not np.array_equal(frames[0], frames[1])
 
 
 def test_gain_colors_deepen_with_the_gain() -> None:
@@ -207,3 +267,16 @@ def test_add_draws_collections_as_polygons() -> None:
     draw._add(ax, mixed, facecolor="red")
     draw._add(ax, shapely.Polygon(), facecolor="red")
     assert len(ax.patches) == 1
+
+
+def test_draw_packing_writes_a_pdf_and_a_png(tmp_path: Path) -> None:
+    """The packing page is saved both ways; the PNG is 2200 x 1700."""
+    wi: State = SYNTHETIC_STATES[0]
+    rings: list[npt.NDArray[np.float64]] = [
+        rotated.Square(lon, 44.5, 0.1, 20_000.0).ring() for lon in (-91.0, -89.0)]
+    paths: list[Path] = draw.draw_packing(
+        wi, rings, np.array([[-90.0, 46.0]]), [shapely.box(-90.0, 44.0, -89.99, 44.01)],
+        SYNTHETIC_STATES, tmp_path / "pack", "Header", "Headline", ["one", "two"], "Legend")
+    assert [p.name for p in paths] == ["pack.pdf", "pack.png"]
+    with Image.open(paths[1]) as im:
+        assert im.size == (2200, 1700)

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import main
-from squares import data
+from squares import data, packing, rotated
 from tests.helpers import SYNTHETIC_STATES
 
 
@@ -116,8 +116,43 @@ def test_compare_command_writes_gains_and_a_gif(tmp_path: Path, monkeypatch: pyt
     assert (tmp_path / "north_vs_rotated.mp4").exists() == (shutil.which("ffmpeg") is not None)
 
 
+def test_compare_close_up_makes_one_flip_book_per_state(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_states: list[data.State]) -> None:
+    """With --close-up, each named state gets its own GIF (and MP4, given
+    ffmpeg), and the combined CSV and US map are left alone."""
+    run(monkeypatch, "compare", "WI", "--close-up", "--out", str(tmp_path))
+    names: set[str] = {p.name for p in tmp_path.iterdir()}
+    want: set[str] = {"WI_north_vs_rotated.gif"}
+    if shutil.which("ffmpeg") is not None:
+        want.add("WI_north_vs_rotated.mp4")
+    assert names == want
+
+
 def test_unknown_state_is_an_error(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
                                    fake_states: list[data.State]) -> None:
     """A typo in a state abbreviation stops the program with a message."""
     with pytest.raises(SystemExit, match="unknown state abbreviation"):
         run(monkeypatch, "aligned", "ZZ", "--no-draw", "--out", str(tmp_path))
+
+
+def test_pack_command_writes_results_and_merges_the_summary(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_states: list[data.State]) -> None:
+    """Each state gets a CSV, PDF, PNG and checkpoint; the summary keeps rows
+    from earlier runs; and the CSV holds enough to rebuild the packing."""
+    quick: list[str] = ["--count", "3", "--minutes", "0.03", "--workers", "1",
+                        "--out", str(tmp_path)]
+    run(monkeypatch, "pack", "WI", *quick)
+    run(monkeypatch, "pack", "RI", "--no-draw", *quick)
+    names: set[str] = {p.name for p in tmp_path.iterdir()}
+    assert {"WI_3_squares.csv", "WI_3_squares.pdf", "WI_3_squares.png",
+            "WI_3_squares_checkpoint.csv", "RI_3_squares.csv", "pack_3_summary.csv"} <= names
+    assert "RI_3_squares.pdf" not in names
+    summary: list[dict[str, str]] = read_csv(tmp_path / "pack_3_summary.csv")
+    assert [r["abbr"] for r in summary] == ["RI", "WI"]  # Rhode Island, Wisconsin
+    assert all(0 < float(r["side_mi"]) < float(r["area_limit_mi"]) for r in summary)
+    rows: list[dict[str, str]] = read_csv(tmp_path / "WI_3_squares.csv")
+    rebuilt: list[rotated.Square] = [
+        rotated.Square(float(r["center_lon"]), float(r["center_lat"]), float(r["theta_rad"]),
+                       float(r["half_side_m"])) for r in rows]
+    wi: data.State = next(s for s in fake_states if s.abbr == "WI")
+    assert len(rebuilt) == 3 and packing.fits(wi.geom, rebuilt)

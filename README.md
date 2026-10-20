@@ -12,10 +12,11 @@ project computes three versions for all 50 states and draws them as maps:
 | `aligned` | The largest box bounded by two **parallels and two meridians** (lines of latitude and longitude), sized so its height equals its width at its middle latitude. Not truly square: its north edge is shorter than its south edge. |
 | `north` | The largest **true square** whose sides face north, south, east and west. |
 | `rotated` | The largest **true square at any rotation**. |
-| `compare` | An **animated GIF** (and MP4 video) flipping between the `north` and `rotated` maps, showing which squares grow by turning and by how much. |
+| `compare` | An **animated GIF** (and MP4 video) flipping between the `north` and `rotated` maps, showing which squares grow by turning and by how much. With `--close-up`, one zoomed-in flip-book per state instead. |
+| `pack` | The biggest size at which **17 equal squares** (or any `--count`) fit in a state together, without overlapping: a state-shaped version of the famous [17 squares puzzle](#packing-17-squares). This one is a long random search, not a proof. |
 
-Each search is a branch-and-bound that finds the *best possible* square, not
-just a good one, to within a stated tolerance of a few feet to a few tens of
+Each single-square search is a branch-and-bound that finds the *best possible*
+square, not just a good one, to within a stated tolerance of a few feet to a few tens of
 feet (subject to the caveats under [Guarantees](#guarantees-and-their-limits)).
 
 Facing north versus free to rotate (darker squares gain more by turning):
@@ -37,7 +38,9 @@ uv run main.py north
 uv run main.py rotated
 uv run main.py compare              # north vs rotated, as a GIF
 uv run main.py rotated WI CO TX     # just these states
+uv run main.py compare NM --close-up # flip-book zoomed in on New Mexico
 uv run main.py rotated --help       # all options
+uv run main.py pack WI --minutes 10 # 17 squares packed into Wisconsin
 ```
 
 The first run downloads the Census boundary file (about 3 MB) into `data/`.
@@ -61,11 +64,29 @@ Each command writes, with `PREFIX` being `aligned`, `north` or `rotated`:
 the same flip-book as `north_vs_rotated.mp4` for sites that take video rather
 than GIFs, such as Threads (only if [ffmpeg](https://ffmpeg.org/) is
 installed), and `north_vs_rotated.csv`, which lists each state's north-facing
-and rotated side lengths and the gain, biggest gain first.
+and rotated side lengths and the gain, biggest gain first. With `--close-up`,
+it makes one zoomed-in flip-book per state instead,
+`ABBR_north_vs_rotated.gif` and `.mp4` (see [below](#close-ups)), and leaves
+the CSV and the US map alone.
 
 On a typical desktop the searches take about 1½ minutes for `aligned`, 15
 seconds for `north` and 4–5 minutes for `rotated` (so about 5 for `compare`),
 plus about a minute to draw the outputs.
+
+`pack` runs for as long as you let it (`--minutes`, default 5, per state) and
+has options of its own: `--count` (default 17), `--workers` (processes
+searching in parallel, default one per CPU), `--seed`, and `--verbose` (report
+every finished run). It writes to `out/pack/`:
+
+| File | Contents |
+|---|---|
+| `ABBR_17_squares.pdf`, `.png` | The state with its packed squares, where they touch each other and the border, and the numbers |
+| `ABBR_17_squares.csv` | One row per square: side, rotation, center, corners, and the exact parameters to rebuild it |
+| `ABBR_17_squares_checkpoint.csv` | The best layout so far, saved whenever the search improves (not yet checked on the ellipsoid) |
+| `pack_17_summary.csv` | One row per state searched so far: side, area limit, how much of the state is covered, search effort |
+
+On Windows, `pack` also asks the computer not to go to sleep until it
+finishes, so it can run overnight.
 
 ## Results
 
@@ -117,6 +138,104 @@ and no reasonable variant of the aligned box reproduces 158:
 The north-facing true square rounds to 158, so that is most likely what the
 original computation measured, perhaps without its author realizing it differs
 from a latitude/longitude box.
+
+## Packing 17 squares
+
+Sixteen equal squares pack neatly into a bigger square as a 4×4 grid. The
+best known way to fit seventeen is a lopsided jumble of tilted squares that
+went viral in 2021 as an "ugly math" meme: it needs a container of side
+4.6756 (found by John Bidwell in the late 1990s), and nobody has proven that
+it can't be beaten. The `pack` command asks the same question of a state:
+**how big can 17 equal squares be and still all fit inside?**
+
+There is no hope of a proof here, so `pack` is a search that gives:
+
+- **a lower limit:** a real packing, checked independently on the ellipsoid,
+  so the best possible side is at least this big;
+- **an upper limit:** 17 squares can't cover more than the state's area, so
+  the side is at most √(area / 17). The true best lies in between, and is
+  probably much closer to the packing than to the area limit, since
+  irregular borders always waste some space.
+
+For a sense of scale, New Mexico's single largest square is 333.9 miles, so
+Bidwell's packing scaled to fit inside it would give 17 squares of
+333.9 / 4.6756 = 71.4 miles. An hour's search found 73.7 miles by also using
+the land outside that big square:
+
+![17 equal squares, 73.7 miles on a side, packed into New Mexico, three of them tilted 45 degrees](docs/NM_17_squares.png)
+
+Results from an hour's search per state on 8 cores (seed 0):
+
+| State | 17 squares (mi) | Area limit (mi) | Squares cover | Bidwell in the biggest square (mi) |
+|---|---|---|---|---|
+| Texas | **104.2** | 125.0 | 69.6% | 73.1 |
+| California | **82.3** | 96.5 | 72.8% | 45.0 |
+| New Mexico | **73.7** | 84.6 | 76.0% | 71.4 |
+| Illinois | **50.5** | 57.6 | 76.8% | 35.3 |
+| Wisconsin | **50.2** | 57.5 | 76.3% | 35.8 |
+
+The last column is the scaled-down puzzle answer that fits in the state's
+single biggest square. It is only a starting point: long or irregular states
+like California, Illinois and Texas do far better by following their own
+shape.
+
+### How the packing search works (`squares/packing.py`)
+
+- **The map.** Everything happens on a stereographic map centered on the
+  state. It is conformal, so a small true square shows up as a square, just
+  scaled by the map's scale factor (fitted with a small polynomial that
+  matches PROJ's own to about 10⁻¹⁰).
+- **Scoring a layout.** A layout is each square's center and rotation. The
+  biggest common size for a layout is the smallest of: for each square, the
+  size at which it hits the border (the rotated L-infinity distance from
+  [the single-square search](#the-key-trick-square-distance)), and for each
+  pair, the size at which the two touch (from the separating-axis theorem:
+  two squares are apart exactly when one of their four side directions
+  separates them, which gives a simple formula).
+- **Polishing.** The size is a "maximize the minimum" of many limits, which
+  calls for sequential linear programming: linearize every limit near the
+  smallest, solve a small linear program (with
+  [HiGHS](https://highs.dev/)) for the move that raises the smallest one the
+  most within a trust region, take the move if it really helps, and repeat.
+- **Exploring.** Basin hopping, a relative of simulated annealing: shake up
+  the layout (jiggle everything, pick up a wedged-in square and drop it into
+  the roomiest spot, or turn one), polish, and keep the result if it is
+  better, or now and then even if it is a little worse. When a run stops
+  improving, the next starts either fresh, from a greedy layout, or from a
+  hard shake of the best layout so far. Each CPU runs its own independent
+  search, and the best of them wins.
+- **Checking.** The winning layout is turned into true squares on the
+  ellipsoid, and their common size is found again from scratch by bisection
+  with shapely, so the map's tiny distortions can't hide an overlap. The map
+  model is very close: in the hour-long runs above, the check trimmed 0.004
+  miles (Illinois, Wisconsin) to 0.036 miles (Texas), more for bigger
+  squares.
+
+**Speed.** Profiling drove a series of changes that made each
+shake-and-polish round about 16 times faster than the first version (about
+50 ms for Wisconsin on one core):
+
+- polishing roughly while exploring, and stopping as soon as the linear
+  program foresees no real gain;
+- giving up early on rounds that clearly won't beat the current layout;
+- finding nearby border segments with a grid instead of checking them all;
+- measuring the nudged copies (for numerical derivatives) only against the
+  border segments that matter;
+- solving each linear program with HiGHS directly, with presolve turned off
+  (2–3 times faster for programs this small);
+- trying a random sample of candidate spots when re-dropping a square.
+
+In one test, a minute on 8 cores beat what 3 minutes had found before the
+changes (49.3 vs 48.6 miles for Wisconsin).
+
+**Limits.** The answer depends on luck and time: separate searches settle on
+different layouts, sometimes several miles apart. Longer searches tend to do
+better, and different `--seed` values explore differently. In the hour-long
+runs, Wisconsin and Illinois were still improving in the last ten minutes,
+while Texas found its best after 7 minutes and then stalled, so another seed
+is likelier to beat it than more time. The pictures mark border
+points and square pairs within 100 feet as touching (generous, because the
+final check can shrink a packing found on the map by a few meters).
 
 ## Design decisions
 
@@ -229,6 +348,25 @@ makes the first frame show 21 ms longer, because without an edit list
 there's nowhere to record the offset. It's invisible, and the stream is
 still exactly 30 fps.
 
+#### Close-ups
+
+`compare --close-up` zooms in on each chosen state, on a stereographic map so
+the squares look square. Each frame shows one version's square filled, with
+its side length and the border points that stop it from growing, and the
+other version dashed. Alongside are both versions' numbers, with the one
+shown highlighted and the gain in green; everything else stays put, so the
+flip shows only what changes. The GIF and MP4 are made the same way as the
+US-wide ones (same sizes, and the same video encoding).
+
+For example, New Mexico's square gains half a mile by turning 1.7°
+clockwise. Colorado's gains only 0.2 miles, but the flip shows something the
+US map can't: the two squares sit 94 miles apart. Colorado's north and south
+borders are nearly parallels, so a square as tall as the state fits almost
+anywhere along it, and small irregularities in the surveyed borders decide
+where the best one goes:
+
+![Animation flipping between Colorado's biggest north-facing square, at the west end of the state, and its biggest rotated square, 94 miles farther east](docs/CO_north_vs_rotated.gif)
+
 ## How the search works
 
 ### The key trick: square distance
@@ -335,6 +473,7 @@ squares/
   linf.py            L-infinity distance from a point to line segments
   aligned.py         largest latitude/longitude-aligned box
   rotated.py         largest true square, rotated or facing north
+  packing.py         17 (or any number of) equal squares packed into a state
   draw.py            maps, social PNGs, comparison GIF and MP4, detail pages
   arrays.py          names for the NumPy array types used in type hints
 tests/               pytest suite (fully type-annotated too)
@@ -349,12 +488,12 @@ mypy, so `uv run` sets up a development environment (in `.venv/`) the first
 time:
 
 ```sh
-uv run pytest                  # the whole suite, about 40 seconds
-uv run pytest -m "not slow"    # skip the tests that use the real Census data
+uv run pytest                  # the whole suite, a minute or two
+uv run pytest -m "not slow"    # skip the slow ones (real Census data, worker processes)
 uv run mypy                    # strict type check of main.py, squares/ and tests/
 ```
 
-The suite has 123 tests:
+The suite has 144 tests:
 
 - **Formulas:** the ellipsoid formulas are checked against published WGS84
   values (quarter meridian, equator length, polar radius).
@@ -366,6 +505,11 @@ The suite has 123 tests:
   side of half its diagonal; narrow strips give boxes limited by their width.
 - **Solvers against independent checks:** brute-force grid searches, random
   squares, and shapely containment.
+- **Packing:** the fast paths (grid lookup, scale-factor fit, room for a
+  square, pair limits) are checked against brute force and shapely; the
+  polishing never shrinks a layout; a short search packs four squares into a
+  rectangle almost as well as the obvious 2×2 grid; and the shapely-based
+  final check agrees with the single-square solver.
 - **Output:** the drawing and command-line code is tested end to end on
   made-up states, so those tests need no download.
 - **Real data:** tests marked `slow` pin down the published numbers for
@@ -390,6 +534,7 @@ None of it is copied into this repository; it is all installed separately:
 | pyshp | MIT |
 | matplotlib | Matplotlib license (PSF-based, BSD-compatible) |
 | pillow | MIT-CMU |
+| highspy | MIT (the HiGHS linear-programming solver) |
 | installed by the above | fonttools (MIT), pyparsing (MIT), six (MIT), contourpy (BSD-3-Clause), kiwisolver (BSD), cycler (BSD), packaging (Apache-2.0 or BSD-2-Clause), python-dateutil (Apache-2.0 or BSD), certifi (MPL-2.0) |
 | development only | pytest (MIT), mypy (MIT), types-shapely (Apache-2.0), typing_extensions (PSF-2.0), pathspec (MPL-2.0) |
 
@@ -407,5 +552,7 @@ and the branch-and-bound borrows only polylabel's *idea*, not its code.
 - Search strategy inspired by Mapbox's
   [polylabel](https://github.com/mapbox/polylabel).
 - Built on [NumPy](https://numpy.org/), [Shapely](https://shapely.readthedocs.io/),
-  [pyproj](https://pyproj4.github.io/pyproj/), [pyshp](https://github.com/GeospatialPython/pyshp)
-  and [Matplotlib](https://matplotlib.org/).
+  [pyproj](https://pyproj4.github.io/pyproj/), [pyshp](https://github.com/GeospatialPython/pyshp),
+  [HiGHS](https://highs.dev/) and [Matplotlib](https://matplotlib.org/).
+- The 17-squares puzzle: Erich Friedman's survey
+  [Packing Unit Squares in Squares](https://www.combinatorics.org/ojs/index.php/eljc/article/view/DS7).

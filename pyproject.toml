@@ -9,6 +9,7 @@ authors = [{ name = "Michael Gebis" }]
 requires-python = ">=3.12"
 # Keep in sync with the inline script metadata at the top of main.py.
 dependencies = [
+    "highspy>=1.7",
     "matplotlib>=3.9",
     "numpy>=2.0",
     "pillow>=10",
@@ -31,7 +32,7 @@ package = false
 testpaths = ["tests"]
 pythonpath = ["."]
 markers = [
-    "slow: uses the real Census boundaries (downloaded on first use) and takes a while",
+    "slow: takes a while (uses the real Census boundaries, downloaded on first use, or starts worker processes)",
 ]
 
 [tool.mypy]

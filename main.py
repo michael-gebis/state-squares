@@ -1,6 +1,7 @@
 # /// script
 # requires-python = ">=3.12"
 # dependencies = [
+#     "highspy>=1.7",
 #     "matplotlib>=3.9",
 #     "numpy>=2.0",
 #     "pillow>=10",
@@ -16,10 +17,13 @@
     uv run main.py north                # true square with sides facing north/east
     uv run main.py compare              # GIF flipping between north and rotated
     uv run main.py rotated WI CO WY     # just these
+    uv run main.py compare NM --close-up  # flip-book zoomed in on New Mexico
+    uv run main.py pack WI --minutes 60 # 17 equal squares packed into Wisconsin
 """
 
 import argparse
 import csv
+import os
 import shutil
 import sys
 import time
@@ -28,11 +32,12 @@ from pathlib import Path
 from typing import TypeAlias
 
 import numpy as np
+import shapely
 
 ROOT: Path = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from squares import aligned, data, draw, rotated  # noqa: E402
+from squares import aligned, data, draw, geodesy, packing, rotated  # noqa: E402
 from squares.arrays import FloatArray  # noqa: E402
 
 KM_PER_MILE: float = 1.609344
@@ -76,6 +81,11 @@ COMPARE_TEXT: draw.FlipText = draw.FlipText(
     first_label="Facing north",
     second_label="Free to rotate",
     legend="Side length in miles · dashed: the other version · darker: bigger gain")
+CLOSEUP_LEGEND: str = ("Dashed: the other square\n"
+                       "Blue dots: border points within 50 ft of the square,\n"
+                       "which stop it from growing\n"
+                       "Land area only (US Census 2024 boundaries)\n"
+                       "Lengths on the WGS84 ellipsoid")
 NORTH_CAPTIONS: Captions = Captions(
     title="Largest north-facing square in each state",
     note=f"{TRUE_SQUARE_NOTE}, with sides facing north, south, east and west. {SOURCE_NOTE}",
@@ -231,15 +241,49 @@ def cmd_north(args: argparse.Namespace) -> None:
     write_outputs(args, "north", rows, items, all_states, NORTH_CAPTIONS)
 
 
+def write_closeups(out: Path, north_items: list[draw.Placed], rotated_items: list[draw.Placed],
+                   rotated_rows: list[Row], all_states: list[data.State]) -> None:
+    """For each state, a zoomed-in flip-book between its north-facing and
+    rotated squares: an animated GIF and, if ffmpeg is installed, an MP4."""
+    ffmpeg: str | None = shutil.which("ffmpeg")
+    if ffmpeg is None:
+        print("ffmpeg not found, so no MP4 versions (install ffmpeg to get them)")
+    for north, turned, row in zip(north_items, rotated_items, rotated_rows):
+        rot: float = float(row["rotation_deg"])
+        text: draw.FlipText = draw.FlipText(
+            title=f"The biggest square in {north.state.name}",
+            first_label=COMPARE_TEXT.first_label, second_label=COMPARE_TEXT.second_label,
+            legend=CLOSEUP_LEGEND,
+            first_note="Sides face north, south, east and west",
+            second_note=("Best with no turn" if abs(rot) < 0.05
+                         else f"Turned {describe_rotation(rot)}"))
+        stem: Path = out / f"{north.state.abbr}_north_vs_rotated"
+        gif: Path = draw.draw_closeup_gif(north, turned, all_states, stem.with_suffix(".gif"),
+                                          text)
+        print(f"wrote {gif}")
+        if ffmpeg is not None:
+            video: Path = draw.draw_closeup_video(north, turned, all_states,
+                                                  stem.with_suffix(".mp4"), text, ffmpeg=ffmpeg)
+            print(f"wrote {video}")
+
+
 def cmd_compare(args: argparse.Namespace) -> None:
     """The `compare` command: how much each state gains by rotating its square,
     as a CSV, an animated GIF that flips between the two maps, and (if ffmpeg
-    is installed) the same flip-book as an MP4 video."""
+    is installed) the same flip-book as an MP4 video.  With --close-up, one
+    zoomed-in flip-book per state instead (and no CSV, so a quick look at a
+    few states doesn't replace the full results)."""
     all_states, states = selected_states(args)
     print("north-facing squares:")
     north_rows, north_items = solve_true_squares(states, args.tol, rotate=False)
     print("rotated squares:")
     rotated_rows, rotated_items = solve_true_squares(states, args.tol, rotate=True)
+    if args.close_up:
+        if not args.no_draw:
+            out_dir: Path = Path(args.out)
+            out_dir.mkdir(parents=True, exist_ok=True)
+            write_closeups(out_dir, north_items, rotated_items, rotated_rows, all_states)
+        return
     rows: list[Row] = []
     for north, turned in zip(north_rows, rotated_rows):
         rows.append({
@@ -270,6 +314,134 @@ def cmd_compare(args: argparse.Namespace) -> None:
     print(f"wrote {video}")
 
 
+def keep_awake() -> None:
+    """Ask Windows not to fall asleep while this program runs, so a long
+    search isn't paused overnight.  The request ends when the program does;
+    on other systems this does nothing."""
+    if sys.platform == "win32":
+        import ctypes
+        es_continuous: int = 0x80000000
+        es_system_required: int = 0x00000001
+        ctypes.windll.kernel32.SetThreadExecutionState(es_continuous | es_system_required)
+
+
+def square_rows(squares: list[rotated.Square]) -> list[Row]:
+    """CSV rows for the squares of a packing, one per square, with enough
+    precision to rebuild them exactly."""
+    rows: list[Row] = []
+    for i, sq in enumerate(squares, 1):
+        row: Row = {
+            "square": i, "side_mi": round(float(sq.sides_mi().mean()), 4),
+            "rotation_deg": round(sq.rotation_deg(), 4),
+            "center_lat": sq.lat, "center_lon": sq.lon,  # full precision
+            "theta_rad": sq.theta, "half_side_m": sq.half_side,
+        }
+        for j, (lon, lat) in enumerate(sq.corners(), 1):
+            row[f"corner{j}_lat"] = round(float(lat), 7)
+            row[f"corner{j}_lon"] = round(float(lon), 7)
+        rows.append(row)
+    return rows
+
+
+def write_csv(path: Path, rows: list[Row]) -> None:
+    """Save rows (all with the same columns) as a CSV file."""
+    with open(path, "w", newline="", encoding="utf-8") as f:
+        writer: csv.DictWriter[str] = csv.DictWriter(f, fieldnames=list(rows[0]))
+        writer.writeheader()
+        writer.writerows(rows)
+
+
+def cmd_pack(args: argparse.Namespace) -> None:
+    """The `pack` command: the biggest `--count` equal squares that fit, all
+    together, in each chosen state.  This is a timed random search, so it
+    saves a checkpoint whenever it improves, then the final packing (checked
+    on the ellipsoid) as a CSV, a PDF page and a PNG, and a summary CSV."""
+    all_states, states = selected_states(args)
+    out: Path = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    keep_awake()
+    n: int = args.count
+    summary_path: Path = out / f"pack_{n}_summary.csv"
+    summary: dict[str, Row] = {}
+    if summary_path.exists():
+        with open(summary_path, encoding="utf-8") as f:
+            summary = {r["abbr"]: dict(r) for r in csv.DictReader(f)}
+
+    for st in states:
+        stem: Path = out / f"{st.abbr}_{n}_squares"
+        print(f"{st.abbr}  {st.name}: {n} squares, searching for {args.minutes:g} min "
+              f"on {args.workers} workers (seed {args.seed})", flush=True)
+        t0: float = time.perf_counter()
+        last_report: list[float] = [t0]
+
+        def checkpoint(squares: list[rotated.Square]) -> None:
+            """Save the best layout so far (not yet checked on the ellipsoid)."""
+            side: float = 2 * squares[0].half_side / geodesy.METERS_PER_MILE
+            print(f"    {time.perf_counter() - t0:6.0f}s  new best {side:.3f} mi", flush=True)
+            try:
+                write_csv(stem.with_name(stem.name + "_checkpoint.csv"), square_rows(squares))
+            except OSError as err:  # e.g. the file is open in a spreadsheet
+                print(f"    (couldn't save the checkpoint: {err})", flush=True)
+
+        def log(line: str) -> None:
+            """Show worker reports in verbose mode, else a heartbeat every five minutes."""
+            now: float = time.perf_counter()
+            if args.verbose:
+                print(f"    {line}", flush=True)
+            elif now - last_report[0] >= 300:
+                last_report[0] = now
+                print(f"    {now - t0:6.0f}s  still searching ({line})", flush=True)
+
+        result: packing.Packing = packing.pack_squares(
+            st.geom, n, seconds=60 * args.minutes, seed=args.seed, workers=args.workers,
+            log=log, on_best=checkpoint)
+        side: float = result.side_mi()
+        sides: FloatArray = result.sides_mi()
+        area: float = sum(abs(float(geodesy.GEOD.geometry_area_perimeter(
+            shapely.Polygon(sq.ring()))[0])) for sq in result.squares)
+        state_area: float = abs(float(geodesy.GEOD.geometry_area_perimeter(st.geom)[0]))
+        print(f"{st.abbr}  {st.name:<15} {side:8.3f} mi   (map search {result.search_mi:.3f}, "
+              f"area limit {result.upper_mi:.2f})   {result.hops:,} hops   "
+              f"{result.seconds:5.0f}s", flush=True)
+        write_csv(stem.with_suffix(".csv"), square_rows(result.squares))
+        print(f"wrote {stem.with_suffix('.csv')}")
+        summary[st.abbr] = {
+            "state": st.name, "abbr": st.abbr, "count": n,
+            "side_mi": round(side, 4), "side_km": round(side * KM_PER_MILE, 4),
+            "area_limit_mi": round(result.upper_mi, 4),
+            "coverage_pct": round(100 * area / state_area, 2),
+            "minutes": args.minutes, "workers": result.workers, "hops": result.hops,
+            "seed": args.seed,
+        }
+        write_csv(summary_path, sorted(summary.values(), key=lambda r: str(r["state"])))
+        print(f"wrote {summary_path}")
+        if args.no_draw:
+            continue
+        edge, touching = packing.contacts(st.geom, result.squares)
+        details: list[str] = [
+            f"Side: {side:.2f} mi  ({side * KM_PER_MILE:.2f} km)",
+            f"    all {4 * n} sides agree within {max(1, round(np.ptp(sides) * 5280))} ft",
+            f"Area limit: {result.upper_mi:.2f} mi",
+            f"    {n} squares that big would cover",
+            "    the whole state, so none can beat it",
+            f"Squares cover {100 * area / state_area:.1f}% of the state",
+            f"Search: {result.seconds / 60:.0f} min on {result.workers} cores, "
+            f"{result.hops:,} hops",
+            "    best found, not proven best",
+            f"Edge contacts: {len(edge)} boundary points",
+            f"Square-to-square contacts: {len(touching)}",
+        ]
+        for path in draw.draw_packing(
+                st, [sq.ring() for sq in result.squares], edge, touching, all_states, stem,
+                f"{n} equal squares packed into {st.name} · {SOURCE_NOTE}",
+                f"{n} squares, {side:.1f} miles on a side", details,
+                "Blue dots: state boundary points within 100 ft of a square.\n"
+                "Black marks: where two squares touch (within 100 ft).\n"
+                "Each is a true square (great-circle sides, equal corner\n"
+                "angles), free to rotate."):
+            print(f"wrote {path}")
+
+
 def main() -> None:
     """Parse the command line and run the chosen command."""
     parser: argparse.ArgumentParser = argparse.ArgumentParser(
@@ -290,7 +462,24 @@ def main() -> None:
         p.add_argument("--tol", type=float, default=tol, help=f"optimality tolerance in {tol_help}")
         p.add_argument("--out", default=str(ROOT / "out"), help="output directory")
         p.add_argument("--no-draw", action="store_true", help="write only the CSV, no maps or images")
+        if name == "compare":
+            p.add_argument("--close-up", action="store_true",
+                           help="instead of the US map and CSV, a zoomed-in flip-book of each "
+                                "state (ABBR_north_vs_rotated.gif and .mp4)")
         p.set_defaults(func=func)
+    pack: argparse.ArgumentParser = sub.add_parser(
+        "pack", help="biggest COUNT equal squares that fit together in each state")
+    pack.add_argument("states", nargs="*", help="state abbreviations (default: all 50)")
+    pack.add_argument("--count", type=int, default=17, help="how many squares (default 17)")
+    pack.add_argument("--minutes", type=float, default=5.0,
+                      help="search time per state (default 5)")
+    pack.add_argument("--workers", type=int, default=os.cpu_count() or 1,
+                      help="processes searching in parallel (default: one per CPU)")
+    pack.add_argument("--seed", type=int, default=0, help="random seed (default 0)")
+    pack.add_argument("--verbose", action="store_true", help="report every finished run")
+    pack.add_argument("--out", default=str(ROOT / "out" / "pack"), help="output directory")
+    pack.add_argument("--no-draw", action="store_true", help="write only the CSVs, no PDF or PNG")
+    pack.set_defaults(func=cmd_pack)
     args: argparse.Namespace = parser.parse_args()
     args.func(args)
 

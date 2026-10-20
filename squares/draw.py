@@ -21,7 +21,7 @@ from matplotlib.axes import Axes  # noqa: E402
 from matplotlib.backends.backend_pdf import PdfPages  # noqa: E402
 from matplotlib.colors import to_hex, to_rgb  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
-from matplotlib.text import Text  # noqa: E402
+from matplotlib.text import Annotation, Text  # noqa: E402
 from PIL import Image  # noqa: E402
 from pyproj import Transformer  # noqa: E402
 from shapely.geometry.base import BaseGeometry  # noqa: E402
@@ -312,6 +312,8 @@ class FlipText:
     first_label: str  # banner naming each frame, e.g. "Facing north"
     second_label: str
     legend: str  # small print explaining the shading and outlines
+    first_note: str = ""  # close-ups only: a line under each version's number,
+    second_note: str = ""  # e.g. "Turned 1.7° clockwise from north"
 
 
 def _flip_frames(first: list[Placed], second: list[Placed], states: list[State],
@@ -346,20 +348,37 @@ def _flip_frames(first: list[Placed], second: list[Placed], states: list[State],
         fig.text(0.03, 0.865, label, ha="left", va="top", fontsize=19, weight="bold",
                  color="white", bbox={"boxstyle": "round,pad=0.35", "fc": pill, "ec": "none"})
         fig.text(0.985, 0.015, text.legend, ha="right", va="bottom", fontsize=9.5, color=MUTED)
-        buffer: io.BytesIO = io.BytesIO()
-        fig.savefig(buffer, format="png", dpi=dpi, facecolor="white")
-        plt.close(fig)
-        buffer.seek(0)
-        frames.append(Image.open(buffer).convert("RGB"))
+        frames.append(_render(fig, dpi))
     return frames
+
+
+def _render(fig: Figure, dpi: float) -> Image.Image:
+    """Turn a figure into an RGB image on a white background, and close it."""
+    buffer: io.BytesIO = io.BytesIO()
+    fig.savefig(buffer, format="png", dpi=dpi, facecolor="white")
+    plt.close(fig)
+    buffer.seek(0)
+    return Image.open(buffer).convert("RGB")
 
 
 def draw_flip_gif(first: list[Placed], second: list[Placed], states: list[State], path: Path,
                   text: FlipText, frame_seconds: float = 1.0) -> Path:
     """Write an animated GIF (1600x900, looping forever) that flips between two
     versions of the map; see _flip_frames for what each frame shows."""
-    frames: list[Image.Image] = _flip_frames(first, second, states, text, GIF_DPI)
+    return _save_gif(_flip_frames(first, second, states, text, GIF_DPI), path, frame_seconds)
 
+
+def draw_flip_video(first: list[Placed], second: list[Placed], states: list[State], path: Path,
+                    text: FlipText, cycles: int = 8, ffmpeg: str = "ffmpeg") -> Path:
+    """Write the flip-book comparison as a 1920x1080 MP4 video, for sites that
+    take video rather than GIFs (such as Threads); see _save_video."""
+    return _save_video(_flip_frames(first, second, states, text, VIDEO_DPI), path, cycles,
+                       ffmpeg)
+
+
+def _save_gif(frames: list[Image.Image], path: Path, frame_seconds: float) -> Path:
+    """Write frames as an animated GIF that loops forever, showing each for
+    `frame_seconds`."""
     # One shared palette (GIFs allow 256 colors) so colors don't shimmer between frames.
     width, height = frames[0].size
     both: Image.Image = Image.new("RGB", (width, height * len(frames)))
@@ -385,19 +404,16 @@ def draw_flip_gif(first: list[Placed], second: list[Placed], states: list[State]
     return path
 
 
-def draw_flip_video(first: list[Placed], second: list[Placed], states: list[State], path: Path,
-                    text: FlipText, cycles: int = 8, ffmpeg: str = "ffmpeg") -> Path:
-    """Write the flip-book comparison as an MP4 video, for sites that take video
-    rather than GIFs (such as Threads), using the ffmpeg program.
+def _save_video(frames: list[Image.Image], path: Path, cycles: int, ffmpeg: str) -> Path:
+    """Write frames as an MP4 video using the ffmpeg program.
 
-    Each frame shows for one second, and the pair repeats `cycles` times,
+    Each frame shows for one second, and the set repeats `cycles` times,
     since videos don't loop on their own the way GIFs do.  The encoding follows
     Meta's published requirements for Threads: H.264 video, 4:2:0 color, at
     most 1920 pixels wide, 23-60 frames per second, the index ("moov atom") at
     the front of the file and no edit lists.  It also carries a silent AAC
     audio track, because some upload pipelines reject videos with none.
     """
-    frames: list[Image.Image] = _flip_frames(first, second, states, text, VIDEO_DPI)
     seconds: int = cycles * len(frames)
     with tempfile.TemporaryDirectory() as tmp:
         for i, frame in enumerate(frames):
@@ -430,12 +446,144 @@ def draw_flip_video(first: list[Placed], second: list[Placed], states: list[Stat
     return path
 
 
+# Close-up flip-books (16:9): where the map goes, and a color for the
+# numbers of the version not being shown.
+CLOSEUP_MAP: Rect = (0.01, 0.03, 0.58, 0.78)
+FADED: str = "#c9c9c9"
+
+
+def _closeup_figure(first: Placed, second: Placed, shown: int, states: list[State],
+                    text: FlipText) -> Figure:
+    """One frame of a close-up flip-book comparing two versions of one state's
+    square (e.g. facing north and free to rotate); `shown` is 0 for the first
+    version, 1 for the second.
+
+    The map shows that version's square filled, with its side length and the
+    border points that stop it from growing, and the other version as a
+    dashed outline.  The numbers for both versions sit alongside, the shown
+    one highlighted.  Everything else is the same in both frames, so flipping
+    between them shows only what changes.
+    """
+    st: State = first.state
+    proj: _Proj = _state_proj(st)
+    land: BaseGeometry = proj.geom(_display_geom(st))
+    versions: list[Placed] = [first, second]
+    sides: list[float] = [round(v.side_mi, 1) for v in versions]
+    gain: float = round(sides[1] - sides[0], 1)  # as the reader would subtract them
+    it: Placed = versions[shown]
+
+    fig: Figure = plt.figure(figsize=(12, 6.75))
+    ax: Axes = fig.add_axes(CLOSEUP_MAP)
+    ax.set_axis_off()
+    for other in _nearby(st, states):
+        _add(ax, proj.geom(other.geom), facecolor=NEIGHBOR, edgecolor=NEIGHBOR_EDGE,
+             linewidth=0.6)
+    _add(ax, land, facecolor=LAND, edgecolor=LAND_EDGE, linewidth=0.8)
+    _add(ax, shapely.Polygon(proj.xy(it.outline)), facecolor=SQUARE, edgecolor=SQUARE_EDGE,
+         linewidth=1.0, alpha=0.85)
+    ghost: FloatArray = proj.xy(versions[1 - shown].outline)
+    ax.plot(ghost[:, 0], ghost[:, 1], color=INK, lw=1.0, ls=(0, (3, 2)), alpha=0.8)
+    if len(it.contacts):
+        c: FloatArray = proj.xy(it.contacts)
+        ax.scatter(c[:, 0], c[:, 1], s=20, color=CONTACT, zorder=5, edgecolor="white", lw=0.5)
+    x, y = proj.xy(it.center)[0]
+    ax.annotate(f"{sides[shown]:.1f} mi", (x, y), ha="center", va="center", fontsize=24,
+                weight="bold", color=INK)
+    if shown == 1 and gain:
+        ax.annotate(f"{gain:+.1f}", (x, y), xytext=(0, -30), textcoords="offset points",
+                    ha="center", va="center", fontsize=16, weight="bold", color=GAIN, bbox=BADGE)
+    sx0, sy0, sx1, sy1 = land.bounds
+    pad: float = 0.04 * max(sx1 - sx0, sy1 - sy0)
+    ax.set_xlim(sx0 - pad, sx1 + pad)
+    ax.set_ylim(sy0 - pad, sy1 + pad)
+    ax.set_aspect("equal")
+    _scale_bar(ax, pad, fontsize=11)
+
+    fig.text(0.025, 0.955, text.title, ha="left", va="top", fontsize=27, weight="bold", color=INK)
+    fig.text(0.03, 0.865, [text.first_label, text.second_label][shown], ha="left", va="top",
+             fontsize=19, weight="bold", color="white",
+             bbox={"boxstyle": "round,pad=0.35", "fc": [INK, GAIN][shown], "ec": "none"})
+    for i, (label, note) in enumerate([(text.first_label, text.first_note),
+                                       (text.second_label, text.second_note)]):
+        on: bool = i == shown
+        top: float = 0.78 - 0.2 * i
+        fig.text(0.63, top, label, fontsize=15, weight="bold", color=INK if on else FADED,
+                 va="top")
+        value: Text = fig.text(0.63, top - 0.045, f"{sides[i]:.1f} mi", fontsize=30,
+                               weight="bold", color=SQUARE_EDGE if on else FADED, va="top")
+        if i == 1 and gain:
+            fig.add_artist(Annotation(f"  {gain:+.1f} mi", (1.0, 0.5), xycoords=value,
+                                      ha="left", va="center", fontsize=18, weight="bold",
+                                      color=GAIN if on else FADED))
+        fig.text(0.63, top - 0.12, note, fontsize=11, color=MUTED if on else FADED, va="top")
+    fig.text(0.63, 0.06, text.legend, ha="left", va="bottom", fontsize=11, color=MUTED,
+             linespacing=1.5)
+    return fig
+
+
+def _closeup_frames(first: Placed, second: Placed, states: list[State], text: FlipText,
+                    dpi: float) -> list[Image.Image]:
+    """Render both frames of a close-up flip-book; see _closeup_figure."""
+    return [_render(_closeup_figure(first, second, shown, states, text), dpi) for shown in (0, 1)]
+
+
+def draw_closeup_gif(first: Placed, second: Placed, states: list[State], path: Path,
+                     text: FlipText, frame_seconds: float = 1.0) -> Path:
+    """Write an animated GIF (1600x900, looping forever) that flips between two
+    versions of one state's square, zoomed in on the state; see
+    _closeup_figure for what each frame shows."""
+    return _save_gif(_closeup_frames(first, second, states, text, GIF_DPI), path, frame_seconds)
+
+
+def draw_closeup_video(first: Placed, second: Placed, states: list[State], path: Path,
+                       text: FlipText, cycles: int = 8, ffmpeg: str = "ffmpeg") -> Path:
+    """Write the close-up flip-book as a 1920x1080 MP4 video; see _save_video."""
+    return _save_video(_closeup_frames(first, second, states, text, VIDEO_DPI), path, cycles,
+                       ffmpeg)
+
+
 def _nice_length(target_mi: float) -> int:
     """A round number of miles, at least `target_mi`, for a scale bar."""
     for v in [1, 2, 5, 10, 20, 25, 50, 100, 200, 250, 500]:
         if v >= target_mi:
             return v
     return 1000
+
+
+def _scale_bar(ax: Axes, pad: float, fontsize: float = 9) -> None:
+    """Draw a scale bar of a round number of miles about a fifth of the way
+    across, in the bottom left corner of a zoomed-in map (projected in
+    meters, limits already set), `pad` meters in from the edges."""
+    x0, x1 = ax.get_xlim()
+    y0, _ = ax.get_ylim()
+    bar_mi: int = _nice_length((x1 - x0) / 5 / METERS_PER_MILE)
+    bar_x: float = x0 + pad
+    bar_y: float = y0 + pad / 2
+    ax.plot([bar_x, bar_x + bar_mi * METERS_PER_MILE], [bar_y, bar_y], color=INK, lw=2,
+            solid_capstyle="butt")
+    ax.text(bar_x + bar_mi * METERS_PER_MILE / 2, bar_y + pad / 4, f"{bar_mi} mi", ha="center",
+            va="bottom", fontsize=fontsize, color=INK)
+
+
+def _nearby(st: State, states: list[State]) -> list[State]:
+    """The other states close enough to show around `st` on a zoomed-in map."""
+    minx, miny, maxx, maxy = _display_geom(st).bounds
+    near: list[State] = []
+    for other in states:
+        if other.abbr == st.abbr:
+            continue
+        ominx, ominy, omaxx, omaxy = other.geom.bounds
+        if ominx <= maxx + 2 and omaxx >= minx - 2 and ominy <= maxy + 2 and omaxy >= miny - 2:
+            near.append(other)
+    return near
+
+
+def _state_proj(st: State) -> _Proj:
+    """A stereographic map centered on a state.  It is conformal, so squares
+    look square everywhere on it."""
+    minx, miny, maxx, maxy = _display_geom(st).bounds
+    return _Proj(f"+proj=stere +lat_0={(miny + maxy) / 2} +lon_0={(minx + maxx) / 2} "
+                 "+datum=WGS84 +units=m +no_defs")
 
 
 def _detail_page(it: Placed, states: list[State], header: str, legend: str) -> Figure:
@@ -449,16 +597,10 @@ def _detail_page(it: Placed, states: list[State], header: str, legend: str) -> F
     ax: Axes = fig.add_axes((0.02, 0.04, 0.63, 0.88))
     ax.set_axis_off()
 
-    geom: BaseGeometry = _display_geom(it.state)
-    sminx, sminy, smaxx, smaxy = geom.bounds
-    for other in states:
-        if other.abbr == it.state.abbr:
-            continue
-        ominx, ominy, omaxx, omaxy = other.geom.bounds
-        if ominx <= smaxx + 2 and omaxx >= sminx - 2 and ominy <= smaxy + 2 and omaxy >= sminy - 2:
-            _add(ax, proj.geom(other.geom), facecolor=NEIGHBOR, edgecolor=NEIGHBOR_EDGE,
-                 linewidth=0.5)
-    projected: BaseGeometry = proj.geom(geom)
+    for other in _nearby(it.state, states):
+        _add(ax, proj.geom(other.geom), facecolor=NEIGHBOR, edgecolor=NEIGHBOR_EDGE,
+             linewidth=0.5)
+    projected: BaseGeometry = proj.geom(_display_geom(it.state))
     _add(ax, projected, facecolor=LAND, edgecolor=LAND_EDGE, linewidth=0.7)
 
     for guide in it.guides:
@@ -478,17 +620,7 @@ def _detail_page(it: Placed, states: list[State], header: str, legend: str) -> F
     ax.set_xlim(minx - pad, maxx + pad)
     ax.set_ylim(miny - pad, maxy + pad)
     ax.set_aspect("equal")
-
-    # Scale bar, bottom left.
-    x0, x1 = ax.get_xlim()
-    y0, _ = ax.get_ylim()
-    bar_mi: int = _nice_length((x1 - x0) / 5 / METERS_PER_MILE)
-    bar_x: float = x0 + pad
-    bar_y: float = y0 + pad / 2
-    ax.plot([bar_x, bar_x + bar_mi * METERS_PER_MILE], [bar_y, bar_y], color=INK, lw=2,
-            solid_capstyle="butt")
-    ax.text(bar_x + bar_mi * METERS_PER_MILE / 2, bar_y + pad / 4, f"{bar_mi} mi", ha="center",
-            va="bottom", fontsize=9, color=INK)
+    _scale_bar(ax, pad)
 
     fig.text(0.67, 0.86, f"{it.state.name}", fontsize=24, weight="bold", color=INK)
     fig.text(0.67, 0.81, f"{it.side_mi:.1f} miles", fontsize=16, color=SQUARE_EDGE)
@@ -498,6 +630,52 @@ def _detail_page(it: Placed, states: list[State], header: str, legend: str) -> F
                          "square, which stop it from growing.\n" + legend,
              fontsize=8.5, color=MUTED, va="bottom", linespacing=1.5)
     return fig
+
+
+def draw_packing(st: State, outlines: list[FloatArray], edge_contacts: FloatArray,
+                 pair_contacts: list[BaseGeometry], states: list[State], stem: Path,
+                 header: str, headline: str, details: list[str], legend: str) -> list[Path]:
+    """A page showing several squares packed into one state: the squares
+    (lon/lat rings), the boundary points and square-to-square slivers where
+    they are wedged tight, neighboring states, a scale bar, and the numbers
+    alongside.  Saved as stem.pdf and as stem.png (2200 x 1700 pixels);
+    returns both paths."""
+    proj: _Proj = _state_proj(st)
+    fig: Figure = plt.figure(figsize=(11, 8.5))
+    fig.text(0.03, 0.965, header, fontsize=9, color=MUTED)
+    ax: Axes = fig.add_axes((0.02, 0.04, 0.63, 0.88))
+    ax.set_axis_off()
+    for other in _nearby(st, states):
+        _add(ax, proj.geom(other.geom), facecolor=NEIGHBOR, edgecolor=NEIGHBOR_EDGE,
+             linewidth=0.5)
+    projected: BaseGeometry = proj.geom(_display_geom(st))
+    _add(ax, projected, facecolor=LAND, edgecolor=LAND_EDGE, linewidth=0.7)
+    for ring in outlines:
+        _add(ax, shapely.Polygon(proj.xy(ring)), facecolor=SQUARE, edgecolor=SQUARE_EDGE,
+             linewidth=0.9, alpha=0.85)
+    for sliver in pair_contacts:
+        _add(ax, proj.geom(sliver), facecolor=INK, edgecolor=INK, linewidth=2.2, zorder=4)
+    if len(edge_contacts):
+        c: FloatArray = proj.xy(edge_contacts)
+        ax.scatter(c[:, 0], c[:, 1], s=14, color=CONTACT, zorder=5, edgecolor="white", lw=0.4)
+
+    sx0, sy0, sx1, sy1 = projected.bounds
+    pad: float = 0.04 * max(sx1 - sx0, sy1 - sy0)
+    ax.set_xlim(sx0 - pad, sx1 + pad)
+    ax.set_ylim(sy0 - pad, sy1 + pad)
+    ax.set_aspect("equal")
+    _scale_bar(ax, pad)
+
+    fig.text(0.67, 0.86, st.name, fontsize=24, weight="bold", color=INK)
+    fig.text(0.67, 0.81, headline, fontsize=14, color=SQUARE_EDGE)  # 16 clipped "104.2 miles"
+    fig.text(0.67, 0.77, "\n".join(details), fontsize=9.5, family="monospace", color=INK,
+             va="top", linespacing=1.6)
+    fig.text(0.67, 0.12, legend, fontsize=8.5, color=MUTED, va="bottom", linespacing=1.5)
+    paths: list[Path] = [stem.with_suffix(".pdf"), stem.with_suffix(".png")]
+    fig.savefig(paths[0])
+    fig.savefig(paths[1], dpi=200)
+    plt.close(fig)
+    return paths
 
 
 def _table_page(items: list[Placed], title: str, note: str) -> Figure:
