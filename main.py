@@ -19,6 +19,7 @@
     uv run main.py rotated WI CO WY     # just these
     uv run main.py compare NM --close-up  # flip-book zoomed in on New Mexico
     uv run main.py pack WI --minutes 60 # 17 equal squares packed into Wisconsin
+    uv run main.py nest CA              # the biggest other state that fits in California
 """
 
 import argparse
@@ -27,7 +28,7 @@ import os
 import shutil
 import sys
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TypeAlias
 
@@ -37,7 +38,7 @@ import shapely
 ROOT: Path = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
 
-from squares import aligned, data, draw, geodesy, packing, rotated  # noqa: E402
+from squares import aligned, data, draw, geodesy, nesting, packing, rotated  # noqa: E402
 from squares.arrays import FloatArray  # noqa: E402
 
 KM_PER_MILE: float = 1.609344
@@ -442,6 +443,261 @@ def cmd_pack(args: argparse.Namespace) -> None:
             print(f"wrote {path}")
 
 
+SQ_METERS_PER_SQ_MILE: float = geodesy.METERS_PER_MILE**2
+NEST_LEGEND: str = ("Each state is slid and turned, never flipped or stretched,\n"
+                    "and every island has to land on the host's land.\n"
+                    "Areas are of the outlines: land plus inland lakes\n"
+                    "and rivers (US Census 2024 boundaries).")
+NEST_SOURCE: str = ("US Census 2024 cartographic boundaries (1:500,000), "
+                    "shapes moved on the WGS84 ellipsoid")
+# How many of the bigger states that don't fit to list on the page.
+NEST_MISSES_SHOWN: int = 8
+NEST_MAP_TITLE: str = "The biggest state that fits inside each state"
+NEST_MAP_NOTE: str = ("Each one drawn at its real size, slid and turned (never flipped or "
+                      "stretched), with every island on the host's land. Biggest by the area of "
+                      "its outline (land plus inland lakes and rivers). Found by a search, not "
+                      "proven best. US Census 2024 cartographic boundaries (1:500,000); shapes "
+                      "moved on the WGS84 ellipsoid.")
+NEST_SOCIAL_SUBTITLE: str = "Drawn at real size · slid and turned, never flipped or stretched"
+NEST_SOCIAL_CREDIT: str = "US Census Bureau 2024 boundaries · shapes moved on the WGS84 ellipsoid"
+
+
+def describe_turn(deg: float) -> str:
+    """Put a state's turn into words, e.g. "turned 45.5° counterclockwise"."""
+    if abs(deg) < 0.05:
+        return "not turned"
+    return f"turned {abs(deg):.1f}° {'counterclockwise' if deg > 0 else 'clockwise'}"
+
+
+def sq_mi(area_m2: float) -> float:
+    """Square meters to square miles."""
+    return area_m2 / SQ_METERS_PER_SQ_MILE
+
+
+def nest_rows(host: data.State, host_area: float, fits: list[nesting.Fit]) -> list[Row]:
+    """CSV rows for every state tried inside a host, biggest first, with
+    enough precision to rebuild each placement."""
+    rows: list[Row] = []
+    for fit in fits:
+        p: nesting.Placement = fit.placement
+        rows.append({
+            "host": host.abbr, "guest": fit.guest.abbr, "guest_name": fit.guest.name,
+            "guest_area_sq_mi": round(sq_mi(fit.area)),
+            "pct_of_host_area": round(100 * fit.area / host_area, 2),
+            "best_scale_pct": round(100 * p.scale, 2), "fits": "yes" if fit.fits else "no",
+            "center_lat": p.lat, "center_lon": p.lon,  # full precision
+            "theta_rad": p.theta, "rotation_deg": round(p.rotation_deg(), 2),
+            "seconds": round(fit.seconds, 1),
+        })
+    return rows
+
+
+def describe_time(seconds: float) -> str:
+    """A search time in words: seconds if under a minute and a half, else
+    minutes."""
+    return f"{seconds:.0f} s" if seconds < 90 else f"{seconds / 60:.0f} min"
+
+
+def nest_outcome(fits: list[nesting.Fit]) -> tuple[nesting.Fit | None, list[nesting.Fit]]:
+    """From the guests tried in a host (biggest first): the biggest one that
+    fits (None if none does), and the bigger ones that don't, closest call
+    first."""
+    winner: nesting.Fit | None = next((f for f in fits if f.fits), None)
+    misses: list[nesting.Fit] = sorted(
+        (f for f in fits if not f.fits and (winner is None or f.area > winner.area)),
+        key=lambda f: -f.placement.scale)
+    return winner, misses
+
+
+def nest_details(host: data.State, host_area: float, winner: nesting.Fit | None,
+                 misses: list[nesting.Fit], seconds: float, workers: int) -> list[str]:
+    """The text beside the map: the winner's numbers, then the bigger states
+    that don't fit and how close they come."""
+    lines: list[str] = []
+    if winner:
+        g: data.State = winner.guest
+        room: float = 100 * (winner.placement.scale - 1)
+        lines += [f"{g.name}: {sq_mi(winner.area):,.0f} sq mi,",
+                  f"    {100 * winner.area / host_area:.0f}% of {host.name}'s "
+                  f"{sq_mi(host_area):,.0f}",
+                  describe_turn(winner.placement.rotation_deg()).capitalize(),
+                  f"Room to spare: it fits even {room:.1f}% bigger" if room >= 0.05
+                  else "A tight fit: under 0.05% to spare",
+                  "    (dashed outline)", ""]
+    if misses:
+        lines += ["Bigger states that don't fit, and the" if winner
+                  else "Smaller states, and the biggest",
+                  "biggest copy of each that does:" if winner else "copy of each that fits:"]
+        lines += [f"    {f.guest.name:<16}{100 * f.placement.scale:5.1f}%"
+                  for f in misses[:NEST_MISSES_SHOWN]]
+        if len(misses) > NEST_MISSES_SHOWN:
+            lines.append(f"    and {len(misses) - NEST_MISSES_SHOWN} more")
+        lines.append("")
+    lines += [f"Search: {describe_time(seconds)} on {workers} cores",
+              "    best found, not proven best"]
+    return lines
+
+
+def nest_summary_row(host: data.State, host_area: float, winner: nesting.Fit | None,
+                     closest: nesting.Fit | None, tried: int, seconds: float,
+                     workers: int) -> Row:
+    """One host's row in nest_summary.csv (blank where there is no winner
+    or no miss)."""
+    return {
+        "state": host.name, "abbr": host.abbr,
+        "biggest_fit": winner.guest.name if winner else "",
+        "biggest_fit_abbr": winner.guest.abbr if winner else "",
+        "fit_area_sq_mi": round(sq_mi(winner.area)) if winner else "",
+        "fit_pct_of_area": round(100 * winner.area / host_area, 2) if winner else "",
+        "fit_scale_pct": round(100 * winner.placement.scale, 2) if winner else "",
+        "rotation_deg": round(winner.placement.rotation_deg(), 2) if winner else "",
+        "closest_miss": closest.guest.name if closest else "",
+        "closest_miss_scale_pct": round(100 * closest.placement.scale, 2) if closest else "",
+        "tried": tried, "minutes": round(seconds / 60, 1), "workers": workers,
+    }
+
+
+def load_fits(out: Path, host: data.State, states: list[data.State]) -> list[nesting.Fit]:
+    """The guests tried in a host, biggest first, rebuilt from its saved CSV
+    (empty if it has none).  Scales come back rounded to 0.01%."""
+    path: Path = out / f"{host.abbr}_nest.csv"
+    if not path.exists():
+        return []
+    by_abbr: dict[str, data.State] = {s.abbr: s for s in states}
+    fits: list[nesting.Fit] = []
+    for r in read_rows(path):
+        guest: data.State = by_abbr[r["guest"]]
+        place: nesting.Placement = nesting.Placement(
+            float(r["center_lon"]), float(r["center_lat"]), float(r["theta_rad"]),
+            float(r["best_scale_pct"]) / 100)
+        fits.append(nesting.Fit(guest, place, r["fits"] == "yes", nesting.area(guest),
+                                float(r["seconds"])))
+    return fits
+
+
+def draw_nest_page(out: Path, host: data.State, fits: list[nesting.Fit], seconds: float,
+                   workers: int, states: list[data.State]) -> list[Path]:
+    """Draw one host's page (ABBR_nest.pdf and .png) from its search results:
+    the biggest state that fits, with the biggest copy of it that fits
+    dashed; or, if none fits, the closest call at the biggest size that
+    fits.  Returns the paths written (none if no state was tried)."""
+    winner, misses = nest_outcome(fits)
+    shown: nesting.Fit | None = winner or (misses[0] if misses else None)
+    if shown is None:
+        return []
+    outline: nesting.Outline = nesting.Outline(shown.guest)
+    place: nesting.Placement = shown.placement
+    scale: float = 1.0 if winner else place.scale
+    label: str = shown.guest.name if winner else f"{shown.guest.name}\nat {100 * scale:.1f}%"
+    host_area: float = nesting.area(host)
+    return draw.draw_nesting(
+        host, outline.moved(replace(place, scale=scale)), outline.moved(place) if winner else None,
+        label, states, out / f"{host.abbr}_nest",
+        f"The biggest state that fits inside {host.name} · {NEST_SOURCE}",
+        f"Biggest state that fits: {shown.guest.name}" if winner else "No other state fits",
+        nest_details(host, host_area, winner, misses, seconds, workers), NEST_LEGEND)
+
+
+def cmd_nest(args: argparse.Namespace) -> None:
+    """The `nest` command: for each chosen state, the biggest other state
+    that fits inside it, slid and turned but never flipped or stretched.
+    Bigger states are tried first.  Saves a CSV of every state tried, a
+    summary CSV, and a PDF page and PNG showing the winner in place; then
+    redraws the US map from every state searched so far.  With --redraw,
+    searches nothing and redraws the pages and the map from saved results."""
+    all_states, states = selected_states(args)
+    out: Path = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    keep_awake()
+    summary_path: Path = out / "nest_summary.csv"
+    summary: dict[str, Row] = {}
+    if summary_path.exists():
+        summary = {r["abbr"]: dict(r) for r in read_rows(summary_path)}
+
+    for host in [] if args.redraw else states:
+        print(f"{host.abbr}  {host.name}: trying the bigger states first, "
+              f"on {args.workers} workers", flush=True)
+        t0: float = time.perf_counter()
+        fits: list[nesting.Fit] = nesting.nest(
+            host, all_states, args.workers, every=args.all,
+            log=lambda line: print(f"    {line}", flush=True))
+        seconds: float = time.perf_counter() - t0
+        host_area: float = nesting.area(host)
+        winner, misses = nest_outcome(fits)
+        closest: nesting.Fit | None = misses[0] if misses else None
+        summary[host.abbr] = nest_summary_row(host, host_area, winner, closest, len(fits),
+                                              seconds, args.workers)
+        write_csv(summary_path, sorted(summary.values(), key=lambda r: str(r["state"])))
+        if not fits:
+            print(f"{host.abbr}  {host.name}: no smaller state to try")
+            continue
+        csv_path: Path = out / f"{host.abbr}_nest.csv"
+        write_csv(csv_path, nest_rows(host, host_area, fits))
+        print(f"{host.abbr}  {host.name:<15} biggest that fits: "
+              f"{winner.guest.name if winner else 'none'}"
+              + (f" ({100 * winner.placement.scale:.1f}%)" if winner else "")
+              + (f"; closest miss: {closest.guest.name} ({100 * closest.placement.scale:.1f}%)"
+                 if closest else "") + f"   {seconds:5.0f}s", flush=True)
+        print(f"wrote {csv_path}")
+        print(f"wrote {summary_path}")
+        if not args.no_draw:
+            for path in draw_nest_page(out, host, fits, seconds, args.workers, all_states):
+                print(f"wrote {path}")
+    if args.redraw:
+        for host in states:
+            row: Row | None = summary.get(host.abbr)
+            if row is None:
+                continue
+            for path in draw_nest_page(out, host, load_fits(out, host, all_states),
+                                       60 * float(row["minutes"]), int(row["workers"]),
+                                       all_states):
+                print(f"wrote {path}")
+    if not args.no_draw:
+        for path in draw_nest_maps(out, all_states):
+            print(f"wrote {path}")
+
+
+def load_nested(out: Path, states: list[data.State]) -> list[draw.Nested]:
+    """Every state searched so far (from nest_summary.csv), with the biggest
+    state that fits moved into place, rebuilt from its saved placement."""
+    summary_path: Path = out / "nest_summary.csv"
+    if not summary_path.exists():
+        return []
+    by_abbr: dict[str, data.State] = {s.abbr: s for s in states}
+    items: list[draw.Nested] = []
+    for row in read_rows(summary_path):
+        host: data.State = by_abbr[row["abbr"]]
+        guest_abbr: str = row.get("biggest_fit_abbr") or ""
+        if not guest_abbr:
+            items.append(draw.Nested(host, None, None))
+            continue
+        saved: dict[str, str] = next(r for r in read_rows(out / f"{host.abbr}_nest.csv")
+                                     if r["guest"] == guest_abbr)
+        place: nesting.Placement = nesting.Placement(
+            float(saved["center_lon"]), float(saved["center_lat"]), float(saved["theta_rad"]))
+        guest: data.State = by_abbr[guest_abbr]
+        items.append(draw.Nested(host, guest, nesting.Outline(guest).moved(place)))
+    return items
+
+
+def read_rows(path: Path) -> list[dict[str, str]]:
+    """The rows of a CSV file, as dictionaries."""
+    with open(path, encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def draw_nest_maps(out: Path, states: list[data.State]) -> list[Path]:
+    """Draw the US map of the biggest state that fits inside each state
+    searched so far: nest_map.svg and .pdf, and nest_social.png.  Returns the
+    paths written (none if nothing has been searched)."""
+    items: list[draw.Nested] = load_nested(out, states)
+    if not items:
+        return []
+    return [*draw.draw_nest_map(items, states, out / "nest_map", NEST_MAP_TITLE, NEST_MAP_NOTE),
+            draw.draw_nest_social(items, states, out / "nest_social.png", NEST_MAP_TITLE,
+                                  NEST_SOCIAL_SUBTITLE, NEST_SOCIAL_CREDIT)]
+
+
 def main() -> None:
     """Parse the command line and run the chosen command."""
     parser: argparse.ArgumentParser = argparse.ArgumentParser(
@@ -480,6 +736,19 @@ def main() -> None:
     pack.add_argument("--out", default=str(ROOT / "out" / "pack"), help="output directory")
     pack.add_argument("--no-draw", action="store_true", help="write only the CSVs, no PDF or PNG")
     pack.set_defaults(func=cmd_pack)
+    nest: argparse.ArgumentParser = sub.add_parser(
+        "nest", help="biggest other state that fits inside each state")
+    nest.add_argument("states", nargs="*", help="host state abbreviations (default: all 50)")
+    nest.add_argument("--all", action="store_true",
+                      help="try every smaller state, not just down to the biggest that fits")
+    nest.add_argument("--workers", type=int, default=os.cpu_count() or 1,
+                      help="processes searching in parallel (default: one per CPU)")
+    nest.add_argument("--out", default=str(ROOT / "out" / "nest"), help="output directory")
+    nest.add_argument("--no-draw", action="store_true",
+                      help="write only the CSVs, no pages or maps")
+    nest.add_argument("--redraw", action="store_true",
+                      help="don't search; redraw the pages and the US map from saved results")
+    nest.set_defaults(func=cmd_nest)
     args: argparse.Namespace = parser.parse_args()
     args.func(args)
 

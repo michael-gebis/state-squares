@@ -5,9 +5,13 @@ boundary file on first use and take a little while, so they are marked slow:
 skip them with `pytest -m "not slow"`.
 """
 
-import pytest
+from dataclasses import replace
 
-from squares import aligned, data, rotated
+import pytest
+import shapely
+from shapely.geometry.base import BaseGeometry
+
+from squares import aligned, data, nesting, rotated
 
 pytestmark: pytest.MarkDecorator = pytest.mark.slow
 
@@ -43,3 +47,14 @@ def test_rotated_squares(census_states: dict[str, data.State], abbr: str, side_m
     sq: rotated.Square = rotated.largest_square(census_states[abbr].geom).square
     assert float(sq.sides_mi().mean()) == pytest.approx(side_mi, abs=0.01)
     assert sq.rotation_deg() == pytest.approx(rotation, abs=0.05)
+
+
+def test_illinois_fits_in_california(census_states: dict[str, data.State]) -> None:
+    """Illinois fits in California with room for a copy over 10% bigger, and
+    the placement holds up when checked directly in lon/lat."""
+    ca: nesting.Outline = nesting.Outline(census_states["CA"])
+    il: nesting.Outline = nesting.Outline(census_states["IL"])
+    fit: nesting.Fit = nesting.best_fit(ca, il)
+    assert fit.fits and fit.placement.scale > 1.10
+    real_size: BaseGeometry = il.moved(replace(fit.placement, scale=1.0))
+    assert shapely.segmentize(census_states["CA"].geom, 0.02).contains(real_size)

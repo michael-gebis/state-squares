@@ -25,6 +25,7 @@ from matplotlib.text import Annotation, Text  # noqa: E402
 from PIL import Image  # noqa: E402
 from pyproj import Transformer  # noqa: E402
 from shapely.geometry.base import BaseGeometry  # noqa: E402
+from shapely.ops import polylabel  # noqa: E402
 from shapely.plotting import patch_from_polygon  # noqa: E402
 
 from .arrays import FloatArray  # noqa: E402
@@ -222,20 +223,29 @@ class _Overlay:
     anchors: dict[str, tuple[float, float]]  # lon/lat that fixes each callout's height
 
 
-def _map_figure(items: list[Placed], states: list[State], style: _MapStyle,
-                overlay: _Overlay | None = None) -> Figure:
-    """A figure with the lower 48 and the Alaska and Hawaii insets, each state's
-    square drawn and labeled.  Titles are left to the caller."""
-    by_abbr: dict[str, Placed] = {it.state.abbr: it for it in items}
+@dataclass(frozen=True)
+class _Panel:
+    """One part of a US map: the lower 48, or the Alaska or Hawaii inset."""
+
+    proj: _Proj
+    ax: Axes
+    states: list[State]
+    callout_x: float  # where callout labels start, map meters
+
+
+def _panels(fig: Figure, states: list[State], style: _MapStyle) -> list[_Panel]:
+    """Lay out the lower 48 and the Alaska and Hawaii insets on a figure, with
+    the states drawn as plain land and room on the right for callouts.
+    Panels with no states (e.g. when drawing only a few) are left out."""
     # (projection, where its axes go, states drawn)
-    panels: list[tuple[str, Rect, list[State]]] = [
+    layout: list[tuple[str, Rect, list[State]]] = [
         (CONUS, style.conus, [s for s in states if s.abbr not in ("AK", "HI")]),
         (ALASKA, style.alaska, [s for s in states if s.abbr == "AK"]),
         (HAWAII, style.hawaii, [s for s in states if s.abbr == "HI"]),
     ]
-    fig: Figure = plt.figure(figsize=style.figsize, dpi=style.dpi)
-    for crs, rect, panel_states in panels:
-        if not panel_states:  # e.g. drawing only a few states
+    panels: list[_Panel] = []
+    for crs, rect, panel_states in layout:
+        if not panel_states:
             continue
         proj: _Proj = _Proj(crs)
         ax: Axes = fig.add_axes(rect)
@@ -243,7 +253,25 @@ def _map_figure(items: list[Placed], states: list[State], style: _MapStyle,
         geoms: list[BaseGeometry] = [proj.geom(_display_geom(s)) for s in panel_states]
         for g in geoms:
             _add(ax, g, facecolor=LAND, edgecolor=LAND_EDGE, linewidth=style.border_width)
-        panel_items: list[Placed] = [by_abbr[s.abbr] for s in panel_states if s.abbr in by_abbr]
+        minx, miny, maxx, maxy = shapely.union_all(geoms).bounds
+        pad: float = 0.02 * (maxx - minx)
+        ax.set_xlim(minx - pad, maxx + style.callout_room * (maxx - minx))
+        ax.set_ylim(miny - pad, maxy + pad)
+        ax.set_aspect("equal")
+        panels.append(_Panel(proj, ax, panel_states, maxx + 2 * pad))
+    return panels
+
+
+def _map_figure(items: list[Placed], states: list[State], style: _MapStyle,
+                overlay: _Overlay | None = None) -> Figure:
+    """A figure with the lower 48 and the Alaska and Hawaii insets, each state's
+    square drawn and labeled.  Titles are left to the caller."""
+    by_abbr: dict[str, Placed] = {it.state.abbr: it for it in items}
+    fig: Figure = plt.figure(figsize=style.figsize, dpi=style.dpi)
+    for panel in _panels(fig, states, style):
+        proj: _Proj = panel.proj
+        ax: Axes = panel.ax
+        panel_items: list[Placed] = [by_abbr[s.abbr] for s in panel.states if s.abbr in by_abbr]
         for it in panel_items:
             face: str = overlay.faces.get(it.state.abbr, SQUARE) if overlay else SQUARE
             _add(ax, shapely.Polygon(proj.xy(it.outline)), facecolor=face,
@@ -253,12 +281,7 @@ def _map_figure(items: list[Placed], states: list[State], style: _MapStyle,
                 line: FloatArray = proj.xy(ghost.outline)
                 ax.plot(line[:, 0], line[:, 1], color=INK, lw=style.square_width,
                         ls=(0, (3, 2)), alpha=0.8)
-        minx, miny, maxx, maxy = shapely.union_all(geoms).bounds
-        pad: float = 0.02 * (maxx - minx)
-        ax.set_xlim(minx - pad, maxx + style.callout_room * (maxx - minx))
-        ax.set_ylim(miny - pad, maxy + pad)
-        ax.set_aspect("equal")
-        _label_squares(ax, proj, panel_items, maxx + 2 * pad, style, overlay)
+        _label_squares(ax, proj, panel_items, panel.callout_x, style, overlay)
     return fig
 
 
@@ -266,7 +289,13 @@ def draw_map(items: list[Placed], states: list[State], stem: Path, title: str, n
              formats: tuple[str, ...] = ("svg", "pdf")) -> list[Path]:
     """Draw the detailed US map with every state's square and save it as
     stem.svg, stem.pdf, etc.  Returns the paths written."""
-    fig: Figure = _map_figure(items, states, PRINT_STYLE)
+    return _save_map(_map_figure(items, states, PRINT_STYLE), stem, title, note, formats)
+
+
+def _save_map(fig: Figure, stem: Path, title: str, note: str,
+              formats: tuple[str, ...]) -> list[Path]:
+    """Title a detailed US map and save it as stem.svg, stem.pdf, etc.
+    Returns the paths written."""
     fig.text(0.5, 0.955, title, ha="center", fontsize=22, weight="bold", color=INK)
     fig.text(0.5, 0.935, note, ha="center", va="top", fontsize=10, color=MUTED, wrap=True)
     paths: list[Path] = []
@@ -282,13 +311,112 @@ def draw_social(items: list[Placed], states: list[State], path: Path, title: str
                 subtitle: str, credit: str) -> Path:
     """Draw a simplified 16:9 PNG of the map for posting on social media: big
     title, one bold number per square, callouts for the small states."""
-    fig: Figure = _map_figure(items, states, SOCIAL_STYLE)
+    return _save_social(_map_figure(items, states, SOCIAL_STYLE), path, title, subtitle, credit)
+
+
+def _save_social(fig: Figure, path: Path, title: str, subtitle: str, credit: str) -> Path:
+    """Title a social-media map and save it as a PNG."""
     fig.text(0.025, 0.955, title, ha="left", va="top", fontsize=27, weight="bold", color=INK)
     fig.text(0.025, 0.875, subtitle, ha="left", va="top", fontsize=14, color=MUTED)
     fig.text(0.985, 0.015, credit, ha="right", va="bottom", fontsize=8, color=MUTED)
     fig.savefig(path, dpi=SOCIAL_STYLE.dpi, facecolor="white")
     plt.close(fig)
     return path
+
+
+@dataclass(frozen=True)
+class Nested:
+    """One state with the biggest other state that fits inside it, for the
+    US map."""
+
+    host: State
+    guest: State | None  # None when no other state fits
+    shape: BaseGeometry | None  # the guest moved into the host, lon/lat
+
+
+def _deepest(geom: BaseGeometry) -> tuple[shapely.Point, float]:
+    """The point deepest inside a (projected) geometry's biggest piece, and
+    how far it is from that piece's edge."""
+    piece: shapely.Polygon = max(polygons(geom), key=lambda p: p.area)
+    spot: shapely.Point = polylabel(piece, tolerance=piece.length / 1000)
+    return spot, float(piece.exterior.distance(spot))
+
+
+def _callouts(ax: Axes, entries: list[tuple[float, float, float, str]], callout_x: float,
+              style: _MapStyle) -> None:
+    """Write labels in a column at callout_x, stacked top to bottom without
+    overlapping, each with a leader line back to its spot.  Each entry is
+    (preferred label y, spot x, spot y, text), in map meters."""
+    spacing: float = 1.6 * style.callout_size / _pts_per_meter(ax)
+    prev: float = np.inf
+    for anchor_y, x, y, text in sorted(entries, key=lambda e: -e[0]):
+        label_y: float = min(anchor_y, prev - spacing)
+        prev = label_y
+        ax.plot([x, callout_x - 0.3 * spacing], [y, label_y], color=MUTED,
+                lw=style.border_width)
+        ax.text(callout_x, label_y, text, ha="left", va="center", fontsize=style.callout_size,
+                color=INK)
+
+
+def _label_size(room: float, scale: float, style: _MapStyle) -> float:
+    """The font size (points) for a two-letter label that fits in a circle of
+    radius `room` (map meters), capped at the style's biggest label.  Two
+    capital letters take about 1.3 times the font size across."""
+    return min(2 * room * scale / 1.3 * 0.6, style.label_max)
+
+
+def _nest_figure(items: list[Nested], states: list[State], style: _MapStyle) -> Figure:
+    """A US map with, inside each state, the biggest other state that fits,
+    drawn at its real size and labeled with its abbreviation.  A guest too
+    narrow for its label gets it on a white badge, sized to the host; when
+    even the host is too small, the label becomes a callout such as "RI in
+    MD".  Titles are left to the caller."""
+    by_host: dict[str, Nested] = {it.host.abbr: it for it in items}
+    fig: Figure = plt.figure(figsize=style.figsize, dpi=style.dpi)
+    for panel in _panels(fig, states, style):
+        ax: Axes = panel.ax
+        scale: float = _pts_per_meter(ax)
+        small: list[tuple[float, float, float, str]] = []
+        for st in panel.states:
+            it: Nested | None = by_host.get(st.abbr)
+            if it is None:
+                continue
+            if it.guest is None or it.shape is None:
+                spot, _ = _deepest(panel.proj.geom(_display_geom(st)))
+                small.append((spot.y, spot.x, spot.y, f"{st.abbr}  none"))
+                continue
+            moved: BaseGeometry = panel.proj.geom(it.shape)
+            _add(ax, moved, facecolor=SQUARE, edgecolor=SQUARE_EDGE,
+                 linewidth=style.square_width, alpha=0.85)
+            spot, room = _deepest(moved)
+            size: float = _label_size(room, scale, style)
+            badge: dict[str, Any] | None = None
+            if size < style.label_min:
+                _, host_room = _deepest(panel.proj.geom(_display_geom(st)))
+                size = 0.8 * _label_size(host_room, scale, style)
+                badge = {**BADGE, "alpha": 0.8}
+            if size < style.label_min:
+                small.append((spot.y, spot.x, spot.y, f"{it.guest.abbr} in {st.abbr}"))
+            else:
+                ax.text(spot.x, spot.y, it.guest.abbr, ha="center", va="center", fontsize=size,
+                        weight="bold", color=INK, bbox=badge)
+        _callouts(ax, small, panel.callout_x, style)
+    return fig
+
+
+def draw_nest_map(items: list[Nested], states: list[State], stem: Path, title: str, note: str,
+                  formats: tuple[str, ...] = ("svg", "pdf")) -> list[Path]:
+    """Draw the detailed US map of the biggest state that fits inside each
+    state, and save it as stem.svg, stem.pdf, etc.  Returns the paths
+    written."""
+    return _save_map(_nest_figure(items, states, PRINT_STYLE), stem, title, note, formats)
+
+
+def draw_nest_social(items: list[Nested], states: list[State], path: Path, title: str,
+                     subtitle: str, credit: str) -> Path:
+    """Draw a 16:9 PNG of the map of the biggest state that fits inside each
+    state, for posting on social media."""
+    return _save_social(_nest_figure(items, states, SOCIAL_STYLE), path, title, subtitle, credit)
 
 
 def _gain_color(gain: int) -> str:
@@ -581,8 +709,13 @@ def _nearby(st: State, states: list[State]) -> list[State]:
 def _state_proj(st: State) -> _Proj:
     """A stereographic map centered on a state.  It is conformal, so squares
     look square everywhere on it."""
-    minx, miny, maxx, maxy = _display_geom(st).bounds
-    return _Proj(f"+proj=stere +lat_0={(miny + maxy) / 2} +lon_0={(minx + maxx) / 2} "
+    geom: BaseGeometry = _display_geom(st)
+    minx, miny, maxx, maxy = geom.bounds
+    if maxx - minx > 180:  # Alaska's Aleutians reach across 180 degrees
+        lon: FloatArray = shapely.get_coordinates(geom)[:, 0] % 360
+        minx, maxx = float(lon.min()), float(lon.max())
+    lon0: float = ((minx + maxx) / 2 + 180) % 360 - 180
+    return _Proj(f"+proj=stere +lat_0={(miny + maxy) / 2} +lon_0={lon0} "
                  "+datum=WGS84 +units=m +no_defs")
 
 
@@ -671,6 +804,55 @@ def draw_packing(st: State, outlines: list[FloatArray], edge_contacts: FloatArra
     fig.text(0.67, 0.77, "\n".join(details), fontsize=9.5, family="monospace", color=INK,
              va="top", linespacing=1.6)
     fig.text(0.67, 0.12, legend, fontsize=8.5, color=MUTED, va="bottom", linespacing=1.5)
+    paths: list[Path] = [stem.with_suffix(".pdf"), stem.with_suffix(".png")]
+    fig.savefig(paths[0])
+    fig.savefig(paths[1], dpi=200)
+    plt.close(fig)
+    return paths
+
+
+def draw_nesting(host: State, guest: BaseGeometry, bigger: BaseGeometry | None, label: str,
+                 states: list[State], stem: Path, header: str, headline: str,
+                 details: list[str], legend: str) -> list[Path]:
+    """A page showing one state moved inside another: the host and its
+    neighbors, the guest (a lon/lat geometry) filled in and labeled, an
+    optional bigger copy of it drawn dashed, a scale bar, and the numbers
+    alongside.  Saved as stem.pdf and as stem.png (2200 x 1700 pixels);
+    returns both paths."""
+    proj: _Proj = _state_proj(host)
+    fig: Figure = plt.figure(figsize=(11, 8.5))
+    fig.text(0.03, 0.965, header, fontsize=9, color=MUTED)
+    ax: Axes = fig.add_axes((0.02, 0.04, 0.63, 0.88))
+    ax.set_axis_off()
+    for other in _nearby(host, states):
+        _add(ax, proj.geom(other.geom), facecolor=NEIGHBOR, edgecolor=NEIGHBOR_EDGE,
+             linewidth=0.5)
+    projected: BaseGeometry = proj.geom(_display_geom(host))
+    _add(ax, projected, facecolor=LAND, edgecolor=LAND_EDGE, linewidth=0.7)
+    moved: BaseGeometry = proj.geom(guest)
+    _add(ax, moved, facecolor=SQUARE, edgecolor=SQUARE_EDGE, linewidth=0.8, alpha=0.85)
+    if bigger is not None:
+        for poly in polygons(proj.geom(bigger)):
+            ring: FloatArray = np.asarray(poly.exterior.coords)
+            ax.plot(ring[:, 0], ring[:, 1], color=SQUARE_EDGE, lw=0.8, ls=(0, (3, 2)))
+    # Label the guest's biggest piece at the point deepest inside it.
+    piece: shapely.Polygon = max(polygons(moved), key=lambda p: p.area)
+    spot: shapely.Point = polylabel(piece, tolerance=piece.length / 1000)
+    ax.text(spot.x, spot.y, label, ha="center", va="center", fontsize=13, weight="bold",
+            color=INK, bbox={**BADGE, "alpha": 0.75})
+
+    sx0, sy0, sx1, sy1 = projected.bounds
+    pad: float = 0.04 * max(sx1 - sx0, sy1 - sy0)
+    ax.set_xlim(sx0 - pad, sx1 + pad)
+    ax.set_ylim(sy0 - pad, sy1 + pad)
+    ax.set_aspect("equal")
+    _scale_bar(ax, pad)
+
+    fig.text(0.67, 0.86, host.name, fontsize=24, weight="bold", color=INK)
+    fig.text(0.67, 0.81, headline, fontsize=14, color=SQUARE_EDGE)
+    fig.text(0.67, 0.77, "\n".join(details), fontsize=9.5, family="monospace", color=INK,
+             va="top", linespacing=1.6)
+    fig.text(0.67, 0.06, legend, fontsize=8.5, color=MUTED, va="bottom", linespacing=1.5)
     paths: list[Path] = [stem.with_suffix(".pdf"), stem.with_suffix(".png")]
     fig.savefig(paths[0])
     fig.savefig(paths[1], dpi=200)

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import main
-from squares import data, packing, rotated
+from squares import data, draw, nesting, packing, rotated
 from tests.helpers import SYNTHETIC_STATES
 
 
@@ -156,3 +156,50 @@ def test_pack_command_writes_results_and_merges_the_summary(
                        float(r["half_side_m"])) for r in rows]
     wi: data.State = next(s for s in fake_states if s.abbr == "WI")
     assert len(rebuilt) == 3 and packing.fits(wi.geom, rebuilt)
+
+
+def test_nest_command_finds_the_biggest_state_that_fits(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_states: list[data.State]) -> None:
+    """Hawaii, the biggest state smaller than Wisconsin, fits in it, so
+    Rhode Island isn't tried; a state with nothing smaller is skipped."""
+    monkeypatch.setattr(nesting, "GRID_PIXELS", 150)
+    monkeypatch.setattr(nesting, "SWEEP_STEP_DEG", 3.0)
+    run(monkeypatch, "nest", "WI", "RI", "--workers", "1", "--out", str(tmp_path))
+    maps: set[str] = {"nest_map.svg", "nest_map.pdf", "nest_social.png"}
+    assert {p.name for p in tmp_path.iterdir()} == {
+        "WI_nest.csv", "WI_nest.pdf", "WI_nest.png", "nest_summary.csv", *maps}
+    rows: list[dict[str, str]] = read_csv(tmp_path / "WI_nest.csv")
+    assert [(r["guest"], r["fits"]) for r in rows] == [("HI", "yes")]
+    assert float(rows[0]["best_scale_pct"]) > 100
+    summary: list[dict[str, str]] = read_csv(tmp_path / "nest_summary.csv")
+    assert [(r["abbr"], r["biggest_fit"]) for r in summary] == [("RI", ""), ("WI", "Hawaii")]
+
+
+def test_nest_redraw_works_from_saved_results(
+        tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_states: list[data.State]) -> None:
+    """--redraw searches nothing: with no saved results it draws nothing,
+    and afterwards it rebuilds the page and the map from the CSVs, with
+    Hawaii back in Wisconsin exactly where the search put it."""
+    monkeypatch.setattr(nesting, "GRID_PIXELS", 150)
+    monkeypatch.setattr(nesting, "SWEEP_STEP_DEG", 3.0)
+    run(monkeypatch, "nest", "--redraw", "--out", str(tmp_path))
+    assert not list(tmp_path.iterdir())
+    run(monkeypatch, "nest", "WI", "--workers", "1", "--no-draw", "--out", str(tmp_path))
+    assert {p.name for p in tmp_path.iterdir()} == {"WI_nest.csv", "nest_summary.csv"}
+    run(monkeypatch, "nest", "--redraw", "--out", str(tmp_path))
+    assert {"WI_nest.pdf", "WI_nest.png", "nest_map.svg", "nest_map.pdf",
+            "nest_social.png"} <= {p.name for p in tmp_path.iterdir()}
+    fits: list[nesting.Fit] = main.load_fits(tmp_path, fake_states[0], fake_states)
+    assert [(f.guest.abbr, f.fits) for f in fits] == [("HI", True)]
+    items: list[draw.Nested] = main.load_nested(tmp_path, fake_states)
+    assert [(it.host.abbr, it.guest.abbr if it.guest else None) for it in items] == [("WI", "HI")]
+    wi: data.State = next(s for s in fake_states if s.abbr == "WI")
+    assert items[0].shape is not None and wi.geom.contains(items[0].shape)
+
+
+@pytest.mark.parametrize(("deg", "expected"), [(0.01, "not turned"),
+                                               (45.47, "turned 45.5° counterclockwise"),
+                                               (-178.0, "turned 178.0° clockwise")])
+def test_describe_turn(deg: float, expected: str) -> None:
+    """A state's turn is put into words."""
+    assert main.describe_turn(deg) == expected

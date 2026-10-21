@@ -14,6 +14,7 @@ project computes three versions for all 50 states and draws them as maps:
 | `rotated` | The largest **true square at any rotation**. |
 | `compare` | An **animated GIF** (and MP4 video) flipping between the `north` and `rotated` maps, showing which squares grow by turning and by how much. With `--close-up`, one zoomed-in flip-book per state instead. |
 | `pack` | The biggest size at which **17 equal squares** (or any `--count`) fit in a state together, without overlapping: a state-shaped version of the famous [17 squares puzzle](#packing-17-squares). This one is a long random search, not a proof. |
+| `nest` | The **biggest other state that fits inside** a state, slid and turned but never flipped or stretched (see [States inside states](#states-inside-states)). Also a search, not a proof. |
 
 Each single-square search is a branch-and-bound that finds the *best possible*
 square, not just a good one, to within a stated tolerance of a few feet to a few tens of
@@ -41,6 +42,7 @@ uv run main.py rotated WI CO TX     # just these states
 uv run main.py compare NM --close-up # flip-book zoomed in on New Mexico
 uv run main.py rotated --help       # all options
 uv run main.py pack WI --minutes 10 # 17 squares packed into Wisconsin
+uv run main.py nest CA              # the biggest state that fits in California
 ```
 
 The first run downloads the Census boundary file (about 3 MB) into `data/`.
@@ -85,8 +87,24 @@ every finished run). It writes to `out/pack/`:
 | `ABBR_17_squares_checkpoint.csv` | The best layout so far, saved whenever the search improves (not yet checked on the ellipsoid) |
 | `pack_17_summary.csv` | One row per state searched so far: side, area limit, how much of the state is covered, search effort |
 
-On Windows, `pack` also asks the computer not to go to sleep until it
-finishes, so it can run overnight.
+`nest` tries the other states inside each chosen state, biggest first, and
+stops once one fits (`--all` tries every smaller state anyway). It takes about
+3 minutes for California on 8 cores, about an hour for all 50, and has
+`--workers` too. After searching,
+it redraws the US map from every state searched so far; `--redraw` searches
+nothing and redraws the pages and the map from the saved results. It writes
+to `out/nest/`:
+
+| File | Contents |
+|---|---|
+| `nest_map.svg`, `.pdf` | US map with the biggest state that fits drawn inside each state |
+| `nest_social.png` | A 2400×1350 version of the map for social media |
+| `ABBR_nest.pdf`, `.png` | The state with the biggest state that fits drawn inside it, the biggest copy of it that fits (dashed), and how close the bigger states came |
+| `ABBR_nest.csv` | One row per state tried: area, best scale, whether it fits, and the placement (center and turn) |
+| `nest_summary.csv` | One row per state searched so far: the biggest state that fits, how much room it has, and the closest miss |
+
+On Windows, `pack` and `nest` also ask the computer not to go to sleep until
+they finish, so they can run overnight.
 
 ## Results
 
@@ -237,6 +255,172 @@ is likelier to beat it than more time. The pictures mark border
 points and square pairs within 100 feet as touching (generous, because the
 final check can shrink a packing found on the map by a few meters).
 
+## States inside states
+
+Could Florida fit inside California? The `nest` command asks, for each
+state, **what is the biggest other state that fits inside it?** The other
+state (the guest) may be slid anywhere and turned any amount, but not flipped
+over or stretched, and all of it, islands included, has to land on the
+host's land.
+
+How close a guest comes is measured by its **scale**: the biggest copy of it,
+enlarged or shrunk about its center, that fits somewhere in the host. 100% or
+more means the real state fits.
+
+The answers for all 50 states (about an hour on 8 cores):
+
+![US map with, inside each state, the biggest other state that fits, drawn at real size](docs/nest_social.png)
+
+A few stand out:
+
+- **Texas** holds Arizona with 6.2% to spare, but New Mexico misses by 0.4%.
+- **Alaska** holds California with 14% to spare, but not Texas (92.1%).
+- **Maryland** is the answer for 10 states. Below West Virginia, the next
+  state in size is Maryland, less than half as big, so a state that can't
+  fit West Virginia or anything bigger drops all the way down to Maryland.
+- **The closest calls:** Indiana reaches 99.96% in Iowa, and Utah 99.93% in
+  Colorado. Turned on its side, Utah's straight southern border, 445.5 km
+  long, would have to span Colorado from south to north, which is 445.3 km.
+- **Delaware** holds nothing. Rhode Island, the only smaller state, reaches
+  just 73.2%: Delaware is too narrow, and even Rhode Island's mainland alone,
+  without its islands, reaches only 94.7%. Rhode Island, the smallest state,
+  has nothing to try.
+
+<details>
+<summary>All 50 states</summary>
+
+"Room to spare" is how much bigger the state that fits could be and still
+fit. The closest miss is the bigger state that comes nearest to fitting, with
+the biggest copy of it that fits.
+
+| State | Biggest state that fits | Room to spare | Closest bigger miss |
+|---|---|---|---|
+| Alabama | South Carolina | 3.4% | Indiana (98.7%) |
+| Alaska | California | 14.0% | Texas (92.1%) |
+| Arizona | Utah | 0.5% | Wyoming (95.6%) |
+| Arkansas | South Carolina | 3.1% | Ohio (96.7%) |
+| California | Illinois | 10.7% | Nebraska (98.5%) |
+| Colorado | North Dakota | 7.4% | Utah (99.9%) |
+| Connecticut | Rhode Island | 37.8% | Delaware (96.1%) |
+| Delaware | none |  | Rhode Island (73.2%) |
+| Florida | Maryland | 6.3% | West Virginia (77.2%) |
+| Georgia | Maine | 5.2% | Indiana (96.2%) |
+| Hawaii | Rhode Island | 26.8% | Delaware (81.8%) |
+| Idaho | Indiana | 7.9% | Ohio (97.8%) |
+| Illinois | Maine | 1.8% | Indiana (94.0%) |
+| Indiana | Maryland | 9.4% | West Virginia (87.7%) |
+| Iowa | South Carolina | 4.7% | Indiana (99.96%) |
+| Kansas | Mississippi | 6.5% | Alabama (99.5%) |
+| Kentucky | Maryland | 16.4% | West Virginia (76.7%) |
+| Louisiana | Maryland | 18.0% | West Virginia (85.7%) |
+| Maine | Vermont | 18.0% | Maryland (94.3%) |
+| Maryland | Rhode Island | 24.1% | Delaware (99.8%) |
+| Massachusetts | Delaware | 28.6% | Connecticut (76.0%) |
+| Michigan | Maryland | 3.5% | South Carolina (85.3%) |
+| Minnesota | Mississippi | 5.7% | Alabama (96.4%) |
+| Mississippi | Maryland | 26.1% | West Virginia (99.3%) |
+| Missouri | Ohio | 3.0% | Pennsylvania (92.2%) |
+| Montana | Utah | 2.3% | Wyoming (99.8%) |
+| Nebraska | Pennsylvania | 2.4% | Alabama (98.1%) |
+| Nevada | Georgia | 13.3% | Missouri (97.0%) |
+| New Hampshire | Delaware | 31.7% | Connecticut (95.6%) |
+| New Jersey | Delaware | 22.0% | Connecticut (73.9%) |
+| New Mexico | North Dakota | 2.9% | Utah (99.7%) |
+| New York | Maryland | 12.0% | West Virginia (92.6%) |
+| North Carolina | Maryland | 20.7% | South Carolina (89.6%) |
+| North Dakota | Alabama | 1.5% | Iowa (98.0%) |
+| Ohio | Maryland | 4.4% | South Carolina (93.3%) |
+| Oklahoma | Indiana | 15.3% | Pennsylvania (98.6%) |
+| Oregon | North Dakota | 3.9% | Utah (92.7%) |
+| Pennsylvania | Maryland | 19.5% | Indiana (94.4%) |
+| Rhode Island | none |  |  |
+| South Carolina | Vermont | 23.8% | Maryland (97.2%) |
+| South Dakota | Iowa | 0.6% | Illinois (96.4%) |
+| Tennessee | Vermont | 23.0% | Maryland (97.4%) |
+| Texas | Arizona | 6.2% | New Mexico (99.6%) |
+| Utah | Georgia | 0.6% | Washington (85.8%) |
+| Vermont | Delaware | 57.5% | Connecticut (96.2%) |
+| Virginia | Vermont | 17.6% | Maryland (99.5%) |
+| Washington | Maine | 3.0% | Ohio (95.8%) |
+| West Virginia | Vermont | 7.5% | Maryland (79.3%) |
+| Wisconsin | Maine | 4.3% | Indiana (96.9%) |
+| Wyoming | North Dakota | 1.3% | Utah (99.7%) |
+
+</details>
+
+### California in detail
+
+For California the answer is **Illinois**, turned 45½° counterclockwise,
+with room to spare: a copy 10.7% bigger still fits (dashed).
+
+![Illinois, turned 45 degrees, inside California, with a dashed copy 10.7 percent bigger that also fits](docs/CA_nest.png)
+
+Every bigger state falls short. The closest calls:
+
+| State | Area (sq mi) | Biggest copy that fits |
+|---|---|---|
+| Nebraska | 77,350 | 98.5% |
+| Georgia | 58,908 | 96.8% |
+| Kansas | 82,277 | 94.9% |
+| North Dakota | 70,699 | 94.3% |
+| Washington | 67,696 | 93.8% |
+
+Florida is nowhere near (82.5%), partly because the Keys and its other
+islands have to land on California too. Its mainland alone gets to 96.0%,
+but its L shape still doesn't fit.
+
+"Biggest" here means the biggest outline: land plus inland lakes and rivers,
+which is what the Census outlines cover. Measured that way, Illinois edges
+out Iowa by 66 square miles. By the Census Bureau's land area alone, which
+leaves out lakes and rivers, Iowa is bigger by 341 square miles, and Iowa
+fits too, but only just, with 0.7% to spare.
+
+Being smaller isn't enough. With `--all`, 22 of the 47 smaller states fit in
+California, but Louisiana (95.9%), Wisconsin and Arkansas (both 91.9%) and
+New York (80.0%) don't. Neither does Hawaii (49.7%), because the guest is the
+whole state: the Northwestern Hawaiian Islands string it out over about 1,600
+miles.
+
+### How the nesting search works (`squares/nesting.py`)
+
+- **Moving a state.** On the ellipsoid nothing can slide perfectly rigidly,
+  because it curves a little differently at different latitudes. A state's
+  shape is taken to be how it looks in the plane touching the Earth at its
+  center (the central projection that also defines the
+  [true squares](#true-squares-squaresrotatedpy)). Moving the state means
+  laying that same flat shape, turned, on the plane touching the Earth at
+  its new center, and projecting it back down. Distances within the moved
+  state change by less than 0.05%: about 60 m for Florida moved to
+  California, 130 m for Texas moved all the way to Alaska. Areas change by
+  less than 0.01%.
+- **Sweep.** The host is painted on a grid about 600 pixels across (1.1
+  miles per pixel for California). For each whole degree of turn, one FFT
+  cross-correlation counts how many of the guest's pixels would land off the
+  host, for every possible slide at once. The turns with the fewest stray
+  pixels (up to 8, at least 5° apart) become starting points. At each one
+  the guest is shrunk or grown, still on the grid, to the biggest size with
+  no stray pixels. If that size is far from 100%, the sweep is repeated at
+  that size, so the turns are ranked at the size that matters.
+- **Polishing.** From each starting point, a Nelder–Mead search moves the
+  center and the turn to allow the biggest scale. Each try is measured
+  exactly: bisection on the scale, with shapely checking whether the guest's
+  densified outline really lies inside the host's. The check runs in the
+  host's tangent plane, where both outlines' edges are straight. Each check
+  takes about half a millisecond, so a whole polish takes about a second.
+- **Checking.** A guest counts as fitting only if, at the best placement,
+  the guest at its real size passes the same exact check. A test also checks
+  California's Illinois independently, in longitude and latitude.
+
+**Limits.** A state reported as fitting really fits, because its placement
+is checked exactly. A state reported as not fitting might still fit some
+cleverer way: the sweep tries every degree of turn and every slide on the
+grid, but the polishing is local. The scales of states that don't fit are
+the best found, so the true best scale is at least that much. As a check,
+all 20 near misses in the 50-state run (98% or more, bigger than the
+winner) were searched again more thoroughly, with turns every half degree
+and three times as many starting points. None of them fit, and no scale
+changed by more than a quarter of a percentage point.
+
 ## Design decisions
 
 ### Boundary data
@@ -313,6 +497,14 @@ being a scaled-down copy of the detailed map:
 At 600 px wide (a desktop timeline) nearly every number is readable; at phone
 width the title and the larger states read, and the small eastern ones need a
 tap to expand.
+
+The `nest` maps follow the same rules. Each state that fits is drawn at its
+real size inside its host and labeled with its abbreviation, as large as it
+fits. A state too narrow for its own label (on the social map, every
+Maryland and Vermont) gets it on a white badge sized to the host instead.
+When even the host is too small, the label becomes a callout such as "RI in
+MD"; the social map has 7, for Hawaii and small eastern states. Delaware and
+Rhode Island say "none".
 
 ### Comparison GIF
 
@@ -474,6 +666,7 @@ squares/
   aligned.py         largest latitude/longitude-aligned box
   rotated.py         largest true square, rotated or facing north
   packing.py         17 (or any number of) equal squares packed into a state
+  nesting.py         the biggest other state that fits inside a state
   draw.py            maps, social PNGs, comparison GIF and MP4, detail pages
   arrays.py          names for the NumPy array types used in type hints
 tests/               pytest suite (fully type-annotated too)
@@ -493,7 +686,7 @@ uv run pytest -m "not slow"    # skip the slow ones (real Census data, worker pr
 uv run mypy                    # strict type check of main.py, squares/ and tests/
 ```
 
-The suite has 144 tests:
+The suite has 176 tests:
 
 - **Formulas:** the ellipsoid formulas are checked against published WGS84
   values (quarter meridian, equator length, polar radius).
@@ -510,11 +703,20 @@ The suite has 144 tests:
   polishing never shrinks a layout; a short search packs four squares into a
   rectangle almost as well as the obvious 2×2 grid; and the shapely-based
   final check agrees with the single-square solver.
+- **Nesting:** moving a state keeps its shape (distances within 0.05%,
+  area within 0.01%) and staying put changes nothing; the exact scale agrees
+  with an independent check in longitude and latitude and with a meridian
+  arc; the grid's stray-pixel counts, the choice of starting turns and the
+  Nelder–Mead search behave on simple cases; a full search turns a tall
+  rectangle a quarter turn to fit a wide one; smaller states are skipped
+  once one fits; and the pages and US map can be redrawn from the saved
+  CSVs alone.
 - **Output:** the drawing and command-line code is tested end to end on
   made-up states, so those tests need no download.
 - **Real data:** tests marked `slow` pin down the published numbers for
   Wisconsin, Colorado, Texas and Rhode Island using the real Census
-  boundaries, downloading the file on first use.
+  boundaries, downloading the file on first use, and check that Illinois
+  fits in California.
 
 The code is fully type-annotated, including local variables. The exceptions
 are tuple unpacking and loop variables, which Python can't annotate inline;
@@ -543,8 +745,9 @@ conditions cover distributing modified copies of those libraries themselves,
 not programs that merely use them, so they place no restrictions on this
 code. The optional MP4 output runs the separately installed `ffmpeg` program
 (typically a GPL build) as an external command; the code never links to
-ffmpeg or includes any of it, so this doesn't affect the license either. The Census boundary data is a US government work in the public domain,
-and the branch-and-bound borrows only polylabel's *idea*, not its code.
+ffmpeg or includes any of it, so this doesn't affect the license either.
+The Census boundary data is a US government work in the public domain, and
+the branch-and-bound borrows only polylabel's *idea*, not its code.
 
 ## Credits
 

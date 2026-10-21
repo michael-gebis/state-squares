@@ -280,3 +280,62 @@ def test_draw_packing_writes_a_pdf_and_a_png(tmp_path: Path) -> None:
     assert [p.name for p in paths] == ["pack.pdf", "pack.png"]
     with Image.open(paths[1]) as im:
         assert im.size == (2200, 1700)
+
+
+def test_draw_nesting_writes_a_pdf_and_a_png(tmp_path: Path) -> None:
+    """The nesting page is saved both ways, with the guest labeled, and the
+    dashed bigger copy drawn only when there is one."""
+    wi: State = SYNTHETIC_STATES[0]
+    guest: shapely.Polygon = rectangle(-91.0, 44.0, -89.0, 45.0)
+    for bigger, dashed in [(rectangle(-91.2, 43.9, -88.8, 45.1), 1), (None, 0)]:
+        stem: Path = tmp_path / f"nest{dashed}"
+        paths: list[Path] = draw.draw_nesting(wi, guest, bigger, "Guest", SYNTHETIC_STATES, stem,
+                                              "Header", "Headline", ["one"], "Legend")
+        assert [p.name for p in paths] == [f"{stem.name}.pdf", f"{stem.name}.png"]
+        with Image.open(paths[1]) as im:
+            assert im.size == (2200, 1700)
+
+
+def test_state_map_centers_alaska_across_180_degrees() -> None:
+    """A state whose islands reach past 180 degrees (as Alaska's Aleutians
+    do) gets a map centered on it, not on the Greenwich meridian."""
+    west: shapely.Polygon = rectangle(-179.5, 51.0, -178.5, 52.0)
+    east: shapely.Polygon = rectangle(178.5, 51.0, 179.5, 52.0)
+    proj: draw._Proj = draw._state_proj(state("AK", shapely.MultiPolygon([west, east])))
+    x0, _, x1, _ = proj.geom(shapely.MultiPolygon([west, east])).bounds
+    assert -150_000 < x0 < x1 < 150_000
+
+
+def test_nest_maps_label_big_guests_and_call_out_small_ones(tmp_path: Path) -> None:
+    """A guest with room gets its abbreviation inside it; a tiny guest in a
+    roomy host gets it on a white badge; a tiny guest in a tiny host gets a
+    callout like "DE in RI"; a state with nothing inside says "none"."""
+    wi, ri, ak, hi = SYNTHETIC_STATES
+    delaware: State = state("DE", rectangle(-71.66, 41.54, -71.64, 41.56))
+    items: list[draw.Nested] = [
+        draw.Nested(wi, hi, rectangle(-91.0, 44.0, -89.0, 45.0)),
+        draw.Nested(hi, ri, rectangle(-155.6, 19.4, -155.55, 19.45)),
+        draw.Nested(ri, delaware, delaware.geom),
+        draw.Nested(ak, None, None),
+    ]
+    fig: Figure = draw._nest_figure(items, SYNTHETIC_STATES, draw.SOCIAL_STYLE)
+    texts: dict[str, Text] = {t.get_text(): t for t in fig.findobj(Text)}
+    assert {"HI", "RI", "DE in RI", "AK  none"} <= set(texts)
+    assert texts["HI"].get_bbox_patch() is None
+    assert texts["RI"].get_bbox_patch() is not None
+    plt.close(fig)
+    paths: list[Path] = draw.draw_nest_map(items, SYNTHETIC_STATES, tmp_path / "map", "T", "N")
+    assert [p.name for p in paths] == ["map.svg", "map.pdf"]
+    social: Path = draw.draw_nest_social(items, SYNTHETIC_STATES, tmp_path / "s.png", "T", "S",
+                                         "C")
+    with Image.open(social) as im:
+        assert im.size == (2400, 1350)
+
+
+def test_deepest_point_of_a_rectangle() -> None:
+    """The deepest point of a rectangle is on its midline, half its width
+    from the long sides."""
+    spot, room = draw._deepest(shapely.MultiPolygon([shapely.box(0, 0, 10, 4),
+                                                     shapely.box(20, 0, 21, 1)]))
+    assert spot.y == pytest.approx(2.0, abs=0.05) and 2 <= spot.x <= 8
+    assert room == pytest.approx(2.0, abs=0.05)
