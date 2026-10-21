@@ -93,6 +93,24 @@ def test_moving_keeps_the_shape(tall: nesting.Outline) -> None:
     assert moved_area / tall.area == pytest.approx(1.0, abs=1e-4)
 
 
+def test_nested_states_move_together(wide: nesting.Outline) -> None:
+    """A small state placed a degree east of the wide state's center rides
+    along when the wide state is moved and turned a quarter turn: it ends up
+    north of the new center, still inside, and the wide state lands exactly
+    where it would alone."""
+    small: nesting.Outline = nesting.Outline(SMALL)
+    places: list[nesting.Placement] = [nesting.Placement(-100.0, 45.0, np.pi / 2),
+                                       nesting.Placement(wide.lon + 1.0, wide.lat, 0.0)]
+    outer, inner = nesting.nested([wide, small], places)
+    assert outer.equals(wide.moved(places[0]))
+    assert outer.contains(inner)
+    x, y = wide.plane.project(np.array([[wide.lon + 1.0, wide.lat]]))[0]
+    expected: tuple[float, float] = nesting._Tangent(-100.0, 45.0).lonlat(-y, x)  # turned
+    assert expected[1] > 45.7  # about 85 km north
+    middle: shapely.Point = inner.centroid
+    assert (middle.x, middle.y) == pytest.approx(expected, abs=2e-4)
+
+
 def test_scale_limit_agrees_with_lonlat(wide: nesting.Outline, tall: nesting.Outline) -> None:
     """The biggest scale found in the host's plane is borne out by an
     independent check in lon/lat: a hair smaller fits, a hair bigger doesn't."""

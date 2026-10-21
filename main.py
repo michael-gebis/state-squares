@@ -460,6 +460,15 @@ NEST_MAP_NOTE: str = ("Each one drawn at its real size, slid and turned (never f
                       "moved on the WGS84 ellipsoid.")
 NEST_SOCIAL_SUBTITLE: str = "Drawn at real size · slid and turned, never flipped or stretched"
 NEST_SOCIAL_CREDIT: str = "US Census Bureau 2024 boundaries · shapes moved on the WGS84 ellipsoid"
+NEST_CHAIN_TITLE: str = "States inside states inside states"
+NEST_CHAIN_NOTE: str = ("Inside each state, the biggest other state that fits; inside that one, "
+                        "the biggest state that fits in it; and so on, darker at each step.\n"
+                        "Each drawn at its real size, slid and turned (never flipped or "
+                        "stretched). Found by a search, not proven best. US Census 2024 "
+                        "cartographic boundaries (1:500,000); shapes moved on the WGS84 "
+                        "ellipsoid.")
+NEST_CHAIN_SUBTITLE: str = ("Each holds the biggest state that fits, which holds the biggest "
+                            "that fits in it, and so on")
 
 
 def describe_turn(deg: float) -> str:
@@ -603,8 +612,8 @@ def cmd_nest(args: argparse.Namespace) -> None:
     that fits inside it, slid and turned but never flipped or stretched.
     Bigger states are tried first.  Saves a CSV of every state tried, a
     summary CSV, and a PDF page and PNG showing the winner in place; then
-    redraws the US map from every state searched so far.  With --redraw,
-    searches nothing and redraws the pages and the map from saved results."""
+    redraws the US maps from every state searched so far.  With --redraw,
+    searches nothing and redraws the pages and the maps from saved results."""
     all_states, states = selected_states(args)
     out: Path = Path(args.out)
     out.mkdir(parents=True, exist_ok=True)
@@ -657,27 +666,66 @@ def cmd_nest(args: argparse.Namespace) -> None:
             print(f"wrote {path}")
 
 
+Winner: TypeAlias = tuple[data.State, nesting.Placement] | None
+
+
+def load_winners(out: Path, states: list[data.State]) -> dict[str, Winner]:
+    """For every state searched so far (from nest_summary.csv, in its order),
+    the biggest state that fits inside it and where it goes at its real size,
+    from the saved placement; None if no state fits."""
+    summary_path: Path = out / "nest_summary.csv"
+    if not summary_path.exists():
+        return {}
+    by_abbr: dict[str, data.State] = {s.abbr: s for s in states}
+    winners: dict[str, Winner] = {}
+    for row in read_rows(summary_path):
+        guest_abbr: str = row.get("biggest_fit_abbr") or ""
+        if not guest_abbr:
+            winners[row["abbr"]] = None
+            continue
+        saved: dict[str, str] = next(r for r in read_rows(out / f"{row['abbr']}_nest.csv")
+                                     if r["guest"] == guest_abbr)
+        winners[row["abbr"]] = (by_abbr[guest_abbr], nesting.Placement(
+            float(saved["center_lon"]), float(saved["center_lat"]), float(saved["theta_rad"])))
+    return winners
+
+
 def load_nested(out: Path, states: list[data.State]) -> list[draw.Nested]:
     """Every state searched so far (from nest_summary.csv), with the biggest
     state that fits moved into place, rebuilt from its saved placement."""
-    summary_path: Path = out / "nest_summary.csv"
-    if not summary_path.exists():
-        return []
     by_abbr: dict[str, data.State] = {s.abbr: s for s in states}
     items: list[draw.Nested] = []
-    for row in read_rows(summary_path):
-        host: data.State = by_abbr[row["abbr"]]
-        guest_abbr: str = row.get("biggest_fit_abbr") or ""
-        if not guest_abbr:
-            items.append(draw.Nested(host, None, None))
+    for abbr, won in load_winners(out, states).items():
+        if won is None:
+            items.append(draw.Nested(by_abbr[abbr], None, None))
             continue
-        saved: dict[str, str] = next(r for r in read_rows(out / f"{host.abbr}_nest.csv")
-                                     if r["guest"] == guest_abbr)
-        place: nesting.Placement = nesting.Placement(
-            float(saved["center_lon"]), float(saved["center_lat"]), float(saved["theta_rad"]))
-        guest: data.State = by_abbr[guest_abbr]
-        items.append(draw.Nested(host, guest, nesting.Outline(guest).moved(place)))
+        guest, place = won
+        items.append(draw.Nested(by_abbr[abbr], guest, nesting.Outline(guest).moved(place)))
     return items
+
+
+def load_chains(out: Path, states: list[data.State]) -> list[draw.Chain]:
+    """Every state searched so far, with the biggest state that fits inside
+    it, the biggest that fits inside that one, and so on, each moved along
+    with the ones around it.  A chain stops at a state that holds nothing or
+    hasn't been searched."""
+    by_abbr: dict[str, data.State] = {s.abbr: s for s in states}
+    winners: dict[str, Winner] = load_winners(out, states)
+    outlines: dict[str, nesting.Outline] = {}
+    chains: list[draw.Chain] = []
+    for abbr in winners:
+        dolls: list[nesting.Outline] = []
+        places: list[nesting.Placement] = []
+        won: Winner = winners[abbr]
+        while won is not None:
+            guest, place = won
+            if guest.abbr not in outlines:
+                outlines[guest.abbr] = nesting.Outline(guest)
+            dolls.append(outlines[guest.abbr])
+            places.append(place)
+            won = winners.get(guest.abbr)
+        chains.append(draw.Chain(by_abbr[abbr], nesting.nested(dolls, places)))
+    return chains
 
 
 def read_rows(path: Path) -> list[dict[str, str]]:
@@ -687,15 +735,22 @@ def read_rows(path: Path) -> list[dict[str, str]]:
 
 
 def draw_nest_maps(out: Path, states: list[data.State]) -> list[Path]:
-    """Draw the US map of the biggest state that fits inside each state
-    searched so far: nest_map.svg and .pdf, and nest_social.png.  Returns the
-    paths written (none if nothing has been searched)."""
+    """Draw the US maps of every state searched so far: the biggest state
+    that fits inside each one (nest_map.svg and .pdf, nest_social.png), and
+    the whole chain of states inside states (nest_chain_map.svg and .pdf,
+    nest_chain_social.png).  Returns the paths written (none if nothing has
+    been searched)."""
     items: list[draw.Nested] = load_nested(out, states)
     if not items:
         return []
+    chains: list[draw.Chain] = load_chains(out, states)
     return [*draw.draw_nest_map(items, states, out / "nest_map", NEST_MAP_TITLE, NEST_MAP_NOTE),
             draw.draw_nest_social(items, states, out / "nest_social.png", NEST_MAP_TITLE,
-                                  NEST_SOCIAL_SUBTITLE, NEST_SOCIAL_CREDIT)]
+                                  NEST_SOCIAL_SUBTITLE, NEST_SOCIAL_CREDIT),
+            *draw.draw_chain_map(chains, states, out / "nest_chain_map", NEST_CHAIN_TITLE,
+                                 NEST_CHAIN_NOTE),
+            draw.draw_chain_social(chains, states, out / "nest_chain_social.png",
+                                   NEST_CHAIN_TITLE, NEST_CHAIN_SUBTITLE, NEST_SOCIAL_CREDIT)]
 
 
 def main() -> None:
@@ -747,7 +802,7 @@ def main() -> None:
     nest.add_argument("--no-draw", action="store_true",
                       help="write only the CSVs, no pages or maps")
     nest.add_argument("--redraw", action="store_true",
-                      help="don't search; redraw the pages and the US map from saved results")
+                      help="don't search; redraw the pages and the US maps from saved results")
     nest.set_defaults(func=cmd_nest)
     args: argparse.Namespace = parser.parse_args()
     args.func(args)

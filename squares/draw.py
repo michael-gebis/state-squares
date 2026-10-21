@@ -5,7 +5,7 @@ from __future__ import annotations
 import io
 import subprocess
 import tempfile
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, TypeAlias
 
@@ -417,6 +417,64 @@ def draw_nest_social(items: list[Nested], states: list[State], path: Path, title
     """Draw a 16:9 PNG of the map of the biggest state that fits inside each
     state, for posting on social media."""
     return _save_social(_nest_figure(items, states, SOCIAL_STYLE), path, title, subtitle, credit)
+
+
+@dataclass(frozen=True)
+class Chain:
+    """One state with the biggest other state that fits inside it, the
+    biggest that fits inside that one, and so on, for the US map."""
+
+    host: State
+    shapes: list[BaseGeometry]  # lon/lat, biggest first, each inside the one before
+
+
+# Fills for each step down a chain: pale orange, darkening to nearly black.
+DEPTH_RAMP: tuple[str, ...] = (SQUARE_PALE, SQUARE, SQUARE_EDGE, "#2e0f03")
+
+
+def _depth_color(depth: int, deepest: int) -> str:
+    """Fill color for the state `depth` steps inside its host (1 is the
+    biggest state that fits), in a map whose longest chain is `deepest`
+    steps: the same shade for the same step everywhere, darker each step
+    (and no darker past `deepest`)."""
+    stops: FloatArray = np.array([to_rgb(c) for c in DEPTH_RAMP])
+    at: float = (len(stops) - 1) * min((depth - 1) / max(deepest - 1, 1), 1.0)
+    i: int = min(int(at), len(stops) - 2)
+    r, g, b = (float(c) for c in stops[i] + (stops[i + 1] - stops[i]) * (at - i))
+    return str(to_hex((r, g, b)))
+
+
+def _chain_figure(chains: list[Chain], states: list[State], style: _MapStyle) -> Figure:
+    """A US map with each state's whole chain drawn inside it, one state
+    inside the next, darker at each step.  No labels, so no room is kept for
+    callouts.  Titles are left to the caller."""
+    by_host: dict[str, Chain] = {c.host.abbr: c for c in chains}
+    deepest: int = max((len(c.shapes) for c in chains), default=1)
+    fig: Figure = plt.figure(figsize=style.figsize, dpi=style.dpi)
+    for panel in _panels(fig, states, replace(style, callout_room=0.0)):
+        for st in panel.states:
+            chain: Chain | None = by_host.get(st.abbr)
+            for depth, shape in enumerate(chain.shapes if chain else [], start=1):
+                # Outlined in the next shade down, so even a ragged coast stays quiet.
+                _add(panel.ax, panel.proj.geom(shape), facecolor=_depth_color(depth, deepest),
+                     edgecolor=_depth_color(depth + 1, deepest),
+                     linewidth=0.5 * style.border_width)
+    return fig
+
+
+def draw_chain_map(chains: list[Chain], states: list[State], stem: Path, title: str, note: str,
+                   formats: tuple[str, ...] = ("svg", "pdf")) -> list[Path]:
+    """Draw the detailed US map of each state's chain of states nested inside
+    it, and save it as stem.svg, stem.pdf, etc.  Returns the paths written."""
+    return _save_map(_chain_figure(chains, states, PRINT_STYLE), stem, title, note, formats)
+
+
+def draw_chain_social(chains: list[Chain], states: list[State], path: Path, title: str,
+                      subtitle: str, credit: str) -> Path:
+    """Draw a 16:9 PNG of the map of each state's chain of states nested
+    inside it, for posting on social media."""
+    return _save_social(_chain_figure(chains, states, SOCIAL_STYLE), path, title, subtitle,
+                        credit)
 
 
 def _gain_color(gain: int) -> str:

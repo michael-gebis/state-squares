@@ -91,14 +91,15 @@ every finished run). It writes to `out/pack/`:
 stops once one fits (`--all` tries every smaller state anyway). It takes about
 3 minutes for California on 8 cores, about an hour for all 50, and has
 `--workers` too. After searching,
-it redraws the US map from every state searched so far; `--redraw` searches
-nothing and redraws the pages and the map from the saved results. It writes
+it redraws the US maps from every state searched so far; `--redraw` searches
+nothing and redraws the pages and the maps from the saved results. It writes
 to `out/nest/`:
 
 | File | Contents |
 |---|---|
 | `nest_map.svg`, `.pdf` | US map with the biggest state that fits drawn inside each state |
 | `nest_social.png` | A 2400×1350 version of the map for social media |
+| `nest_chain_map.svg`, `.pdf`, `nest_chain_social.png` | The same maps with [states inside states inside states](#all-the-way-down), all the way down |
 | `ABBR_nest.pdf`, `.png` | The state with the biggest state that fits drawn inside it, the biggest copy of it that fits (dashed), and how close the bigger states came |
 | `ABBR_nest.csv` | One row per state tried: area, best scale, whether it fits, and the placement (center and turn) |
 | `nest_summary.csv` | One row per state searched so far: the biggest state that fits, how much room it has, and the closest miss |
@@ -348,6 +349,18 @@ the biggest copy of it that fits.
 
 </details>
 
+### All the way down
+
+The state inside each state has a state inside it too, and so on, until the
+chain reaches Delaware (29 chains) or Rhode Island (19), the two states with
+nothing inside. Each step down is a darker shade:
+
+![US map with, inside each state, a chain of states each nested inside the one before, darker at each step](docs/nest_chain_social.png)
+
+Texas goes deepest, six states down: Arizona, Utah, Georgia, Maine, Vermont
+and Delaware. Alaska is one of seven states that go five deep: California,
+Illinois, Maine, Vermont, Delaware.
+
 ### California in detail
 
 For California the answer is **Illinois**, turned 45½° counterclockwise,
@@ -410,6 +423,12 @@ miles.
 - **Checking.** A guest counts as fitting only if, at the best placement,
   the guest at its real size passes the same exact check. A test also checks
   California's Illinois independently, in longitude and latitude.
+- **Chains.** Each step of a chain uses the placement found for that state
+  on its own, and a state carries the states inside it along when it moves:
+  Illinois, with Maine inside it and so on, moves into Alaska as part of
+  California. Carrying from one tangent plane to the next turns straight
+  lines into straight lines, so a state that fits at home still fits after
+  the move. On the map, every state lies exactly inside the one around it.
 
 **Limits.** A state reported as fitting really fits, because its placement
 is checked exactly. A state reported as not fitting might still fit some
@@ -504,7 +523,11 @@ fits. A state too narrow for its own label (on the social map, every
 Maryland and Vermont) gets it on a white badge sized to the host instead.
 When even the host is too small, the label becomes a callout such as "RI in
 MD"; the social map has 7, for Hawaii and small eastern states. Delaware and
-Rhode Island say "none".
+Rhode Island say "none". The chain maps have no labels at all, so they keep
+no room for callouts. Each step down a chain has its own shade, the same
+everywhere on the map, and each state is outlined in the next shade down. A
+first try with white outlines turned Maryland's ragged Chesapeake shore into
+white scribbles all over the map.
 
 ### Comparison GIF
 
@@ -686,7 +709,7 @@ uv run pytest -m "not slow"    # skip the slow ones (real Census data, worker pr
 uv run mypy                    # strict type check of main.py, squares/ and tests/
 ```
 
-The suite has 176 tests:
+The suite has 179 tests:
 
 - **Formulas:** the ellipsoid formulas are checked against published WGS84
   values (quarter meridian, equator length, polar radius).
@@ -709,8 +732,10 @@ The suite has 176 tests:
   arc; the grid's stray-pixel counts, the choice of starting turns and the
   Nelder–Mead search behave on simple cases; a full search turns a tall
   rectangle a quarter turn to fit a wide one; smaller states are skipped
-  once one fits; and the pages and US map can be redrawn from the saved
-  CSVs alone.
+  once one fits; a state inside another rides along, still inside, when
+  the outer one is moved and turned; and the pages, the US maps and the
+  chains can be rebuilt from the saved CSVs alone, each chain shaded darker
+  at each step.
 - **Output:** the drawing and command-line code is tested end to end on
   made-up states, so those tests need no download.
 - **Real data:** tests marked `slow` pin down the published numbers for

@@ -8,7 +8,7 @@ from pathlib import Path
 import pytest
 
 import main
-from squares import data, draw, nesting, packing, rotated
+from squares import data, draw, geodesy, nesting, packing, rotated
 from tests.helpers import SYNTHETIC_STATES
 
 
@@ -165,7 +165,8 @@ def test_nest_command_finds_the_biggest_state_that_fits(
     monkeypatch.setattr(nesting, "GRID_PIXELS", 150)
     monkeypatch.setattr(nesting, "SWEEP_STEP_DEG", 3.0)
     run(monkeypatch, "nest", "WI", "RI", "--workers", "1", "--out", str(tmp_path))
-    maps: set[str] = {"nest_map.svg", "nest_map.pdf", "nest_social.png"}
+    maps: set[str] = {"nest_map.svg", "nest_map.pdf", "nest_social.png", "nest_chain_map.svg",
+                      "nest_chain_map.pdf", "nest_chain_social.png"}
     assert {p.name for p in tmp_path.iterdir()} == {
         "WI_nest.csv", "WI_nest.pdf", "WI_nest.png", "nest_summary.csv", *maps}
     rows: list[dict[str, str]] = read_csv(tmp_path / "WI_nest.csv")
@@ -178,23 +179,35 @@ def test_nest_command_finds_the_biggest_state_that_fits(
 def test_nest_redraw_works_from_saved_results(
         tmp_path: Path, monkeypatch: pytest.MonkeyPatch, fake_states: list[data.State]) -> None:
     """--redraw searches nothing: with no saved results it draws nothing,
-    and afterwards it rebuilds the page and the map from the CSVs, with
-    Hawaii back in Wisconsin exactly where the search put it."""
+    and afterwards it rebuilds the pages and the maps from the CSVs, with
+    Hawaii back in Wisconsin exactly where the search put it, and Rhode
+    Island inside Hawaii inside Wisconsin on the chain map."""
     monkeypatch.setattr(nesting, "GRID_PIXELS", 150)
     monkeypatch.setattr(nesting, "SWEEP_STEP_DEG", 3.0)
     run(monkeypatch, "nest", "--redraw", "--out", str(tmp_path))
     assert not list(tmp_path.iterdir())
-    run(monkeypatch, "nest", "WI", "--workers", "1", "--no-draw", "--out", str(tmp_path))
-    assert {p.name for p in tmp_path.iterdir()} == {"WI_nest.csv", "nest_summary.csv"}
+    run(monkeypatch, "nest", "WI", "HI", "--workers", "1", "--no-draw", "--out", str(tmp_path))
+    assert {p.name for p in tmp_path.iterdir()} == {"WI_nest.csv", "HI_nest.csv",
+                                                    "nest_summary.csv"}
     run(monkeypatch, "nest", "--redraw", "--out", str(tmp_path))
-    assert {"WI_nest.pdf", "WI_nest.png", "nest_map.svg", "nest_map.pdf",
-            "nest_social.png"} <= {p.name for p in tmp_path.iterdir()}
-    fits: list[nesting.Fit] = main.load_fits(tmp_path, fake_states[0], fake_states)
+    assert {"WI_nest.pdf", "WI_nest.png", "HI_nest.pdf", "nest_map.svg", "nest_map.pdf",
+            "nest_social.png", "nest_chain_map.svg", "nest_chain_map.pdf",
+            "nest_chain_social.png"} <= {p.name for p in tmp_path.iterdir()}
+    wi: data.State = next(s for s in fake_states if s.abbr == "WI")
+    fits: list[nesting.Fit] = main.load_fits(tmp_path, wi, fake_states)
     assert [(f.guest.abbr, f.fits) for f in fits] == [("HI", True)]
     items: list[draw.Nested] = main.load_nested(tmp_path, fake_states)
-    assert [(it.host.abbr, it.guest.abbr if it.guest else None) for it in items] == [("WI", "HI")]
-    wi: data.State = next(s for s in fake_states if s.abbr == "WI")
-    assert items[0].shape is not None and wi.geom.contains(items[0].shape)
+    assert [(it.host.abbr, it.guest.abbr if it.guest else None) for it in items] == [
+        ("HI", "RI"), ("WI", "HI")]
+    assert items[1].shape is not None and wi.geom.contains(items[1].shape)
+    chains: list[draw.Chain] = main.load_chains(tmp_path, fake_states)
+    assert [(c.host.abbr, len(c.shapes)) for c in chains] == [("HI", 1), ("WI", 2)]
+    hawaii, rhode_island = chains[1].shapes
+    assert hawaii.equals(items[1].shape)
+    assert wi.geom.contains(hawaii) and hawaii.contains(rhode_island)
+    ri: data.State = next(s for s in fake_states if s.abbr == "RI")
+    assert abs(geodesy.GEOD.geometry_area_perimeter(rhode_island)[0]) == pytest.approx(
+        nesting.area(ri), rel=1e-3)
 
 
 @pytest.mark.parametrize(("deg", "expected"), [(0.01, "not turned"),

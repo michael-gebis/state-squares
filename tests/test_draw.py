@@ -14,7 +14,7 @@ import numpy.typing as npt
 import pytest
 import shapely
 from matplotlib.axes import Axes
-from matplotlib.colors import to_rgb
+from matplotlib.colors import to_hex, to_rgb
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.text import Text
@@ -339,3 +339,43 @@ def test_deepest_point_of_a_rectangle() -> None:
                                                      shapely.box(20, 0, 21, 1)]))
     assert spot.y == pytest.approx(2.0, abs=0.05) and 2 <= spot.x <= 8
     assert room == pytest.approx(2.0, abs=0.05)
+
+
+def test_depth_colors_darken_each_step() -> None:
+    """The first step inside a state is pale, each step down is darker, the
+    deepest is the darkest, and nothing goes darker than that."""
+
+    def lightness(depth: int) -> float:
+        """Average of the depth's red, green and blue, in a map six steps deep."""
+        return sum(to_rgb(draw._depth_color(depth, 6))) / 3
+
+    assert draw._depth_color(1, 6) == draw.SQUARE_PALE
+    assert draw._depth_color(6, 6) == draw.DEPTH_RAMP[-1]
+    shades: list[float] = [lightness(d) for d in range(1, 7)]
+    assert shades == sorted(shades, reverse=True)
+    assert len(set(shades)) == len(shades)
+    assert lightness(7) == lightness(6)
+    assert draw._depth_color(1, 1) == draw.SQUARE_PALE
+
+
+def test_chain_maps_shade_each_state_by_its_depth(tmp_path: Path) -> None:
+    """Each state in a chain is filled with its depth's shade, there are no
+    labels, and the maps are written."""
+    wi, ri, ak, hi = SYNTHETIC_STATES
+    chains: list[draw.Chain] = [
+        draw.Chain(wi, [rectangle(-91.0, 44.0, -89.0, 45.0), rectangle(-90.5, 44.2, -90.0, 44.6)]),
+        draw.Chain(ak, [rectangle(-155.0, 62.0, -150.0, 65.0)]),
+        draw.Chain(ri, []),
+    ]
+    fig: Figure = draw._chain_figure(chains, SYNTHETIC_STATES, draw.SOCIAL_STYLE)
+    fills: list[str] = [to_hex(p.get_facecolor()) for ax in fig.axes for p in ax.patches]
+    assert fills.count(draw._depth_color(1, 2)) == 2
+    assert fills.count(draw._depth_color(2, 2)) == 1
+    assert not [t for t in fig.findobj(Text) if t.get_text()]
+    plt.close(fig)
+    paths: list[Path] = draw.draw_chain_map(chains, SYNTHETIC_STATES, tmp_path / "map", "T", "N")
+    assert [p.name for p in paths] == ["map.svg", "map.pdf"]
+    social: Path = draw.draw_chain_social(chains, SYNTHETIC_STATES, tmp_path / "s.png", "T", "S",
+                                          "C")
+    with Image.open(social) as im:
+        assert im.size == (2400, 1350)

@@ -198,8 +198,11 @@ class Outline:
             ring: FloatArray = np.asarray(poly.exterior.coords)
             self.rings.append(np.column_stack(self.to_map.transform(ring[:, 0], ring[:, 1])))
 
-    def into(self, host: Outline, place: Placement) -> BaseGeometry:
-        """This state moved to `place`, in the host's plane (meters)."""
+    def into(self, host: Outline, place: Placement,
+             shape: BaseGeometry | None = None) -> BaseGeometry:
+        """This state moved to `place`, in the host's plane (meters).  With
+        `shape` (in this state's plane), moves that instead, as if it were
+        part of this state: e.g. a smaller state already placed inside it."""
         to_host: FloatArray = host.plane.basis @ _carrier(place)
 
         def carry(uv: FloatArray) -> FloatArray:
@@ -207,10 +210,11 @@ class Outline:
             w: FloatArray = np.column_stack([uv, np.ones(len(uv))]) @ to_host.T
             return (host.plane.height / w[:, 2:]) * w[:, :2] - host.plane.offset
 
-        return shapely.transform(self.flat, carry)
+        return shapely.transform(self.flat if shape is None else shape, carry)
 
-    def moved(self, place: Placement) -> BaseGeometry:
-        """This state moved to `place`, in lon/lat (for drawing)."""
+    def moved(self, place: Placement, shape: BaseGeometry | None = None) -> BaseGeometry:
+        """This state moved to `place`, in lon/lat (for drawing).  With
+        `shape` (in this state's plane), moves that instead, as in `into`."""
         carrier: FloatArray = _carrier(place)
 
         def carry(uv: FloatArray) -> FloatArray:
@@ -218,7 +222,23 @@ class Outline:
             lon, lat = geodesy.to_surface(np.column_stack([uv, np.ones(len(uv))]) @ carrier.T)
             return np.column_stack([lon, lat])
 
-        return shapely.transform(self.flat, carry)
+        return shapely.transform(self.flat if shape is None else shape, carry)
+
+
+def nested(dolls: list[Outline], places: list[Placement]) -> list[BaseGeometry]:
+    """States stacked like Russian dolls: dolls[0] moved to places[0] in some
+    host, then each later doll moved to its place inside the doll before it
+    (where that doll sits at home).  Returns every doll in lon/lat, with each
+    one carried along with the dolls around it.  Carrying from one plane to
+    the next keeps straight edges straight, so a doll that fits inside the
+    one before at home still fits after the move."""
+    shapes: list[BaseGeometry] = []
+    for k, doll in enumerate(dolls):
+        flat: BaseGeometry = doll.flat
+        for j in range(k, 0, -1):  # out through the dolls around it, in their planes
+            flat = dolls[j].into(dolls[j - 1], places[j], flat)
+        shapes.append(dolls[0].moved(places[0], flat))
+    return shapes
 
 
 def fits(host: Outline, guest: Outline, place: Placement) -> bool:
