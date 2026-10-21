@@ -6,6 +6,8 @@ import sys
 from pathlib import Path
 
 import pytest
+import shapely
+from shapely.geometry.base import BaseGeometry
 
 import main
 from squares import data, draw, geodesy, nesting, packing, rotated
@@ -216,3 +218,66 @@ def test_nest_redraw_works_from_saved_results(
 def test_describe_turn(deg: float, expected: str) -> None:
     """A state's turn is put into words."""
     assert main.describe_turn(deg) == expected
+
+
+@pytest.mark.parametrize(("dx", "dy", "expected"), [
+    (0.0, 1.0, "northern"), (1.0, 1.0, "northeastern"), (-1.0, 0.1, "western"),
+    (0.1, -1.0, "southern"), (-1.0, -1.0, "southwestern"), (1.0, -0.2, "eastern")])
+def test_compass(dx: float, dy: float, expected: str) -> None:
+    """Directions become words for part of a state."""
+    assert main.compass(dx, dy) == expected
+
+
+@pytest.mark.parametrize(("area", "expected"), [
+    (0.4, "under 1 sq mi"), (69.4, "69 sq mi"), (679.0, "680 sq mi"), (2737.0, "2,700 sq mi")])
+def test_describe_area(area: float, expected: str) -> None:
+    """Areas are given to two significant figures."""
+    assert main.describe_area(area) == expected
+
+
+def test_spill_captions_say_how_close() -> None:
+    """A guest that fits says so; one that spills a little "almost fits",
+    and its share is rounded down, never up to 100%; more is "doesn't fit"."""
+    tx: data.State = data.State("TX", "Texas", shapely.Point(0, 0))
+    ak: data.State = data.State("AK", "Alaska", shapely.Point(0, 0))
+    title, subtitle, legend = main.spill_captions(tx, ak, True, 100.0, 0.0)
+    assert title == "Texas fits inside Alaska" and len(legend) == 1
+    title, subtitle, legend = main.spill_captions(tx, ak, False, 99.97, 80.0)
+    assert title == "Texas almost fits inside Alaska" and "99.9% of it" in subtitle
+    assert legend[1] == "Spills off Alaska: 80 sq mi (under 0.1%)"
+    title, _, legend = main.spill_captions(tx, ak, False, 93.0, 77.0)
+    assert title == "Texas doesn't fit inside Alaska"
+    assert legend[1] == "Spills off Alaska: 77 sq mi (7.0%)"
+
+
+def test_spill_command(tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+                       fake_states: list[data.State]) -> None:
+    """Hawaii fits on Wisconsin, spilling nothing.  Wisconsin on Hawaii
+    spills all but the part as big as Hawaii, and the spill gets a callout."""
+    monkeypatch.setattr(nesting, "GRID_PIXELS", 150)
+    monkeypatch.setattr(nesting, "SWEEP_STEP_DEG", 3.0)
+    run(monkeypatch, "spill", "hi", "WI", "--out", str(tmp_path))
+    run(monkeypatch, "spill", "WI", "HI", "--out", str(tmp_path))
+    assert {p.name for p in tmp_path.iterdir()} == {
+        "HI_in_WI.csv", "HI_in_WI_social.png", "WI_in_HI.csv", "WI_in_HI_social.png"}
+    fits: dict[str, str] = read_csv(tmp_path / "HI_in_WI.csv")[0]
+    assert (fits["fits"], float(fits["spill_sq_mi"]), fits["pct_of_guest_on_host"]) == (
+        "yes", 0.0, "100.0")
+    spills: dict[str, str] = read_csv(tmp_path / "WI_in_HI.csv")[0]
+    by_abbr: dict[str, data.State] = {s.abbr: s for s in fake_states}
+    share: float = 100 * nesting.area(by_abbr["HI"]) / nesting.area(by_abbr["WI"])
+    assert spills["fits"] == "no"
+    assert float(spills["pct_of_guest_on_host"]) == pytest.approx(share, abs=0.1)
+
+
+def test_spill_notes_name_where_the_spill_comes_from(fake_states: list[data.State]) -> None:
+    """Wisconsin slid half a degree west of its home spills a strip off its
+    western edge, which the callout calls western Wisconsin."""
+    by_abbr: dict[str, data.State] = {s.abbr: s for s in fake_states}
+    host: nesting.Outline = nesting.Outline(by_abbr["WI"])
+    place: nesting.Placement = nesting.Placement(host.lon - 0.5, host.lat, 0.0)
+    off: BaseGeometry = host.moved(place).difference(by_abbr["WI"].geom)
+    notes: list[tuple[float, float, str]] = main.spill_notes(host, host, place, off)
+    assert len(notes) == 1
+    lon, lat, text = notes[0]
+    assert text.endswith("of\nwestern Wisconsin") and -92.5 < lon < -92.0

@@ -21,6 +21,7 @@ from matplotlib.axes import Axes  # noqa: E402
 from matplotlib.backends.backend_pdf import PdfPages  # noqa: E402
 from matplotlib.colors import to_hex, to_rgb  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
+from matplotlib.patches import Patch  # noqa: E402
 from matplotlib.text import Annotation, Text  # noqa: E402
 from PIL import Image  # noqa: E402
 from pyproj import Transformer  # noqa: E402
@@ -475,6 +476,129 @@ def draw_chain_social(chains: list[Chain], states: list[State], path: Path, titl
     inside it, for posting on social media."""
     return _save_social(_chain_figure(chains, states, SOCIAL_STYLE), path, title, subtitle,
                         credit)
+
+
+SPILL: str = "#c62828"  # the parts of a state that spill off another
+SPILL_EDGE: str = "#7f1010"
+
+
+@dataclass(frozen=True)
+class Spill:
+    """One state at its real size on another, and the parts of it that
+    spill off, for a social-media image."""
+
+    host: State
+    guest: State
+    shape: BaseGeometry  # the guest moved into place, lon/lat
+    off: BaseGeometry  # the parts of it that spill off the host, lon/lat (maybe empty)
+    notes: list[tuple[float, float, str]]  # callouts: (lon, lat of a spill, text)
+
+
+def _name_size(name: str, room: float, scale: float, biggest: float) -> float:
+    """The font size (points) for a name in capitals that fits in a circle of
+    radius `room` (map meters), capped at `biggest`.  Capitals take about
+    0.75 times the font size each."""
+    return min(2 * room * scale / (0.75 * max(len(name), 2)), biggest)
+
+
+def _spill_figure(sp: Spill, states: list[State], legend: list[str]) -> Figure:
+    """The host and its neighbors, the guest at its real size filled in where
+    it lands on the host and in red where it spills off, both named, with a
+    callout for each note and, in a row under the map, a legend (an entry for
+    the guest, and one for the spill if any).  Titles are left to the caller."""
+    proj: _Proj = _state_proj(sp.host)
+    fig: Figure = plt.figure(figsize=SOCIAL_STYLE.figsize, dpi=SOCIAL_STYLE.dpi)
+    ax: Axes = fig.add_axes((0.0, 0.11, 1.0, 0.72))  # the legend goes below
+    ax.set_axis_off()
+    for other in _nearby(sp.host, states):
+        _add(ax, proj.geom(other.geom), facecolor=NEIGHBOR, edgecolor=NEIGHBOR_EDGE,
+             linewidth=0.5)
+    host: BaseGeometry = proj.geom(_display_geom(sp.host))
+    _add(ax, host, facecolor=LAND, edgecolor=LAND_EDGE, linewidth=0.7)
+    guest: BaseGeometry = proj.geom(sp.shape)
+    _add(ax, proj.geom(sp.shape.difference(sp.off)), facecolor=SQUARE, edgecolor="none",
+         alpha=0.85)
+    _add(ax, proj.geom(sp.off), facecolor=SPILL, edgecolor=SPILL_EDGE, linewidth=0.6)
+    for poly in polygons(guest):
+        ring: FloatArray = np.asarray(poly.exterior.coords)
+        ax.plot(ring[:, 0], ring[:, 1], color=SQUARE_EDGE, lw=0.9)
+
+    # Each callout's text goes out from the host's middle, past its spill,
+    # far enough to be clear of the host's land.
+    middle, _ = _deepest(host)
+    bounds: tuple[float, float, float, float] = shapely.union_all([host, guest]).bounds
+    extent: float = max(bounds[2] - bounds[0], bounds[3] - bounds[1])
+    # (spill, text tip, text alignment left/right, bottom/center/top, text)
+    callouts: list[tuple[FloatArray, FloatArray, str, str, str]] = []
+    for lon, lat, text in sp.notes:
+        spot: FloatArray = proj.xy([lon, lat])[0]
+        out: FloatArray = spot - np.array([middle.x, middle.y])
+        out = out / max(float(np.hypot(*out)), 1.0)
+        tip: FloatArray = spot + 0.06 * extent * out
+        for _ in range(15):
+            if host.distance(shapely.Point(tip)) >= 0.03 * extent:
+                break
+            tip = tip + 0.02 * extent * out
+        # The text reaches away from the map: sideways, and up or down too
+        # when the way out is mostly up or down.
+        va: str = "center" if abs(out[1]) < 0.7 else "bottom" if out[1] > 0 else "top"
+        callouts.append((spot, tip, "left" if out[0] >= 0 else "right", va, text))
+
+    def frame(room: float) -> float:
+        """Set the map's limits to hold the host, the guest and the callouts,
+        with `room` map meters for each callout's text, above or below its
+        tip or centered on it, and below everything for the scale bar.
+        Returns the padding around it all."""
+        x0, y0, x1, y1 = bounds
+        for _, tip, _, va, _ in callouts:
+            below: float = {"bottom": 0.0, "center": 0.5, "top": 1.0}[va] * room
+            x0, x1 = min(x0, float(tip[0])), max(x1, float(tip[0]))
+            y0, y1 = min(y0, float(tip[1]) - below), max(y1, float(tip[1]) - below + room)
+        y0 -= room
+        pad: float = 0.03 * max(x1 - x0, y1 - y0)
+        ax.set_xlim(x0 - pad, x1 + pad)
+        ax.set_ylim(y0 - pad, y1 + pad)
+        ax.set_aspect("equal")
+        return pad
+
+    # Two lines of 12 pt text are a fixed height on the page, so measure the
+    # map's scale first, then make room.
+    frame(0.0)
+    pad: float = frame(36 / _pts_per_meter(ax))
+    _scale_bar(ax, pad, fontsize=11)
+    scale: float = _pts_per_meter(ax)
+
+    for spot, tip, ha, va, text in callouts:
+        ax.annotate(text, (float(spot[0]), float(spot[1])),
+                    xytext=(float(tip[0]), float(tip[1])), fontsize=12, color=INK,
+                    linespacing=1.3, ha=ha, va=va,
+                    arrowprops={"arrowstyle": "-", "color": INK, "lw": 0.8, "shrinkA": 4,
+                                "shrinkB": 2})
+    for geom, name, biggest, color in [(guest, sp.guest.name, 22.0, INK),
+                                       (host.difference(guest), sp.host.name, 16.0, MUTED)]:
+        if geom.is_empty:
+            continue
+        where, room = _deepest(geom)
+        size: float = _name_size(name, room, scale, biggest)
+        if size >= 9:
+            ax.text(where.x, where.y, name.upper(), ha="center", va="center", fontsize=size,
+                    weight="bold", color=color, alpha=0.8)
+
+    handles: list[Patch] = [Patch(facecolor=SQUARE, edgecolor=SQUARE_EDGE, alpha=0.85,
+                                  label=legend[0])]
+    if len(legend) > 1:
+        handles.append(Patch(facecolor=SPILL, edgecolor=SPILL_EDGE, label=legend[1]))
+    fig.legend(handles=handles, loc="lower left", bbox_to_anchor=(0.02, 0.035),
+               ncol=len(handles), fontsize=12, frameon=False, handlelength=1.6,
+               handleheight=1.1, columnspacing=2.5)
+    return fig
+
+
+def draw_spill(sp: Spill, states: list[State], path: Path, title: str, subtitle: str,
+               legend: list[str], credit: str) -> Path:
+    """Draw a 16:9 PNG for social media of one state at its real size on
+    another, showing what spills off (see `_spill_figure`)."""
+    return _save_social(_spill_figure(sp, states, legend), path, title, subtitle, credit)
 
 
 def _gain_color(gain: int) -> str:

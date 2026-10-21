@@ -33,7 +33,14 @@ How the search works:
 
 This is a search, not a proof.  A guest reported as fitting really does (its
 placement is checked exactly), but one reported as not fitting might still
-fit some cleverer way.
+fit some cleverer way.  Nor is a bigger copy always worse: along a ragged
+coast, a copy can fit where a slightly smaller one doesn't, so the scale
+found is a size that fits, not a promise about every smaller one.
+
+The least spill asks a different question: where the guest, at its real
+size, spills off the host least.  It uses the same sweep at full size, on a
+grid with room for the guest to hang off, then Nelder-Mead on the exact
+spilled area.
 """
 
 from __future__ import annotations
@@ -224,6 +231,63 @@ class Outline:
 
         return shapely.transform(self.flat if shape is None else shape, carry)
 
+    def home(self, place: Placement, shape: BaseGeometry) -> BaseGeometry:
+        """Undo `moved`: where a lon/lat shape on this state, moved to
+        `place`, sits in the state's own plane.  E.g. the part of it that
+        spills off a host, traced back to where it is at home."""
+        center, up, ax_u, ax_v = (a[0] for a in _frames(np.array([place.lon]),
+                                                        np.array([place.lat]),
+                                                        np.array([place.theta])))
+        height: float = float(center @ up)
+
+        def carry(lonlat: FloatArray) -> FloatArray:
+            """Carry (n, 2) lon/lat points up to the plane and into flat coordinates."""
+            p: FloatArray = geodesy.ecef(lonlat[:, 0], lonlat[:, 1])
+            q: FloatArray = (height / (p @ up))[:, None] * p - center
+            return np.column_stack([q @ ax_u, q @ ax_v]) / place.scale
+
+        return shapely.transform(shape, carry)
+
+
+def spilled(host: Outline, guest: Outline, place: Placement) -> float:
+    """How much of the guest, moved to `place`, lies off the host: square
+    meters in the host's plane (close to, but not exactly, the area on the
+    ellipsoid)."""
+    return float(guest.into(host, place).difference(host.flat).area)
+
+
+def least_spill(host: Outline, guest: Outline) -> Placement:
+    """Search for where the guest, at its real size, spills least off the
+    host: the sweep's stray-pixel counts at every turn and slide (on a grid
+    with room for the guest to hang off), then Nelder-Mead on the exact
+    spilled area from the best few turns.  Stops early at a placement that
+    doesn't spill at all.  A search, not a proof."""
+    grid: _Grid = _Grid(host, margin=guest.reach)
+    angles: FloatArray = _sweep_angles()
+    steps: FloatArray = np.array([grid.pixel, grid.pixel, grid.pixel / guest.reach])
+
+    def at(p: FloatArray) -> Placement:
+        """The placement for Nelder-Mead's point (x, y in the host's plane, turn)."""
+        lon, lat = host.plane.lonlat(float(p[0]), float(p[1]))
+        return Placement(lon, lat, float(p[2]))
+
+    def score(p: FloatArray) -> float:
+        """Less spill scores higher."""
+        return -spilled(host, guest, at(p))
+
+    best: Placement = Placement(host.lon, host.lat, 0.0)
+    least: float = np.inf
+    for i in _starts(grid.sweep(guest, 1.0)):
+        start: Placement = grid.placement(guest, float(angles[i]), 1.0)
+        x, y = host.plane.project(np.array([[start.lon, start.lat]]))[0]
+        p, v = _nelder_mead(score, np.array([x, y, start.theta]), steps, POLISH_TOL,
+                            POLISH_EVALS)
+        if -v < least:
+            best, least = at(p), -v
+        if least == 0:
+            break
+    return best
+
 
 def nested(dolls: list[Outline], places: list[Placement]) -> list[BaseGeometry]:
     """States stacked like Russian dolls: dolls[0] moved to places[0] in some
@@ -309,14 +373,15 @@ class _Grid:
     shape: tuple[int, int]  # rows, columns
     _off: npt.NDArray[np.complex128]  # FFT of the off-host mask
 
-    def __init__(self, host: Outline, pixels: int | None = None) -> None:
+    def __init__(self, host: Outline, pixels: int | None = None, margin: float = 0.0) -> None:
         """Paint the host on its map (GRID_PIXELS across unless `pixels` is
-        given), with a margin of off-host pixels."""
+        given), with a border of off-host pixels: two pixels, plus `margin`
+        meters for guests that may hang off the host."""
         self.host = host
         pts: FloatArray = np.concatenate(host.rings)
-        lo: FloatArray = pts.min(axis=0)
-        hi: FloatArray = pts.max(axis=0)
-        self.pixel = float((hi - lo).max()) / (pixels or GRID_PIXELS)
+        lo: FloatArray = pts.min(axis=0) - margin
+        hi: FloatArray = pts.max(axis=0) + margin
+        self.pixel = float((hi - lo).max() - 2 * margin) / (pixels or GRID_PIXELS)
         self.x0, self.y0 = (float(v) for v in lo - 2 * self.pixel)
         cols: int = _good_size(int(np.ceil((hi[0] - self.x0) / self.pixel)) + 3)
         rows: int = _good_size(int(np.ceil((hi[1] - self.y0) / self.pixel)) + 3)

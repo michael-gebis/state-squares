@@ -93,6 +93,46 @@ def test_moving_keeps_the_shape(tall: nesting.Outline) -> None:
     assert moved_area / tall.area == pytest.approx(1.0, abs=1e-4)
 
 
+def test_home_undoes_moving(tall: nesting.Outline) -> None:
+    """Tracing a moved, turned and scaled state back home gives its own
+    outline, to well under a millimeter."""
+    place: nesting.Placement = nesting.Placement(-120.0, 60.0, 1.0, 0.8)
+    back: BaseGeometry = tall.home(place, tall.moved(place))
+    error: float = float(np.abs(shapely.get_coordinates(back)
+                                - shapely.get_coordinates(tall.flat)).max())
+    assert error < 1e-4
+
+
+def test_grid_margin_leaves_room_to_hang_off(wide: nesting.Outline) -> None:
+    """The long guest can't be slid around the grid of the host alone, but
+    with a margin it can, overhanging; the pixels stay the same size."""
+    long: nesting.Outline = nesting.Outline(LONG)
+    plain: nesting._Grid = nesting._Grid(wide, 150)
+    roomy: nesting._Grid = nesting._Grid(wide, 150, margin=long.reach)
+    assert roomy.pixel == pytest.approx(plain.pixel)
+    assert plain.stray(long, 0.0, 1.0)[0] == np.inf
+    count: float = roomy.stray(long, np.pi / 2, 1.0)[0]
+    assert 0 < count < np.inf
+
+
+def test_least_spill_fits_when_it_can(quick: None, wide: nesting.Outline,
+                                      tall: nesting.Outline) -> None:
+    """A guest that fits when turned is placed where it spills nothing."""
+    place: nesting.Placement = nesting.least_spill(wide, tall)
+    assert nesting.spilled(wide, tall, place) == 0.0
+    assert nesting.fits(wide, tall, place)
+
+
+def test_least_spill_lays_a_long_guest_along_the_host(quick: None,
+                                                      wide: nesting.Outline) -> None:
+    """The long guest can't fit, but it spills no more than when laid along
+    the host's length, centered."""
+    long: nesting.Outline = nesting.Outline(LONG)
+    place: nesting.Placement = nesting.least_spill(wide, long)
+    along: nesting.Placement = nesting.Placement(wide.lon, wide.lat, np.pi / 2)
+    assert 0 < nesting.spilled(wide, long, place) <= nesting.spilled(wide, long, along) * 1.001
+
+
 def test_nested_states_move_together(wide: nesting.Outline) -> None:
     """A small state placed a degree east of the wide state's center rides
     along when the wide state is moved and turned a quarter turn: it ends up

@@ -379,3 +379,26 @@ def test_chain_maps_shade_each_state_by_its_depth(tmp_path: Path) -> None:
                                           "C")
     with Image.open(social) as im:
         assert im.size == (2400, 1350)
+
+
+def test_spill_image_names_both_states_and_calls_out_the_spill(tmp_path: Path) -> None:
+    """The guest and host are named, each note is a callout, the legend
+    has a line for the spill only when there is one, and the image is a
+    2400x1350 PNG."""
+    wi, ri, ak, hi = SYNTHETIC_STATES
+    shape: BaseGeometry = rectangle(-92.5, 44.0, -90.5, 45.0)
+    spill: draw.Spill = draw.Spill(wi, hi, shape, shape.difference(wi.geom),
+                                   [(-92.25, 44.5, "1,300 sq mi of\nwestern Hawaii")])
+    fig: Figure = draw._spill_figure(spill, SYNTHETIC_STATES, ["On", "Off"])
+    assert {"HAWAII", "WISCONSIN", "1,300 sq mi of\nwestern Hawaii", "On", "Off"} <= set(
+        all_text(fig))
+    plt.close(fig)
+    fits: draw.Spill = draw.Spill(wi, hi, rectangle(-91.0, 44.0, -90.0, 45.0), shapely.Polygon(),
+                                  [])
+    fig = draw._spill_figure(fits, SYNTHETIC_STATES, ["On"])
+    assert "Off" not in all_text(fig) and "HAWAII" in all_text(fig)
+    plt.close(fig)
+    path: Path = draw.draw_spill(spill, SYNTHETIC_STATES, tmp_path / "s.png", "T", "S",
+                                 ["On", "Off"], "C")
+    with Image.open(path) as im:
+        assert im.size == (2400, 1350)

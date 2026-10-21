@@ -15,6 +15,7 @@ project computes three versions for all 50 states and draws them as maps:
 | `compare` | An **animated GIF** (and MP4 video) flipping between the `north` and `rotated` maps, showing which squares grow by turning and by how much. With `--close-up`, one zoomed-in flip-book per state instead. |
 | `pack` | The biggest size at which **17 equal squares** (or any `--count`) fit in a state together, without overlapping: a state-shaped version of the famous [17 squares puzzle](#packing-17-squares). This one is a long random search, not a proof. |
 | `nest` | The **biggest other state that fits inside** a state, slid and turned but never flipped or stretched (see [States inside states](#states-inside-states)). Also a search, not a proof. |
+| `spill` | One state **at its real size on another**, slid and turned to spill off it as little as possible, with the spill in red (see [Texas in Alaska](#texas-in-alaska)). A search too. |
 
 Each single-square search is a branch-and-bound that finds the *best possible*
 square, not just a good one, to within a stated tolerance of a few feet to a few tens of
@@ -43,6 +44,7 @@ uv run main.py compare NM --close-up # flip-book zoomed in on New Mexico
 uv run main.py rotated --help       # all options
 uv run main.py pack WI --minutes 10 # 17 squares packed into Wisconsin
 uv run main.py nest CA              # the biggest state that fits in California
+uv run main.py spill TX AK          # full-size Texas on Alaska, and what spills off
 ```
 
 The first run downloads the Census boundary file (about 3 MB) into `data/`.
@@ -103,6 +105,15 @@ to `out/nest/`:
 | `ABBR_nest.pdf`, `.png` | The state with the biggest state that fits drawn inside it, the biggest copy of it that fits (dashed), and how close the bigger states came |
 | `ABBR_nest.csv` | One row per state tried: area, best scale, whether it fits, and the placement (center and turn) |
 | `nest_summary.csv` | One row per state searched so far: the biggest state that fits, how much room it has, and the closest miss |
+
+`spill GUEST HOST` puts one state at its real size on another and searches
+for the spot where the least of it spills off. It takes about a minute for
+Texas on Alaska and writes to `out/spill/`:
+
+| File | Contents |
+|---|---|
+| `GUEST_in_HOST_social.png` | A 2400×1350 image for social media: the guest where it lands on the host, the spill in red, and a callout for each of the biggest spills saying how big it is and which part of the guest it is ("350 sq mi of western Texas") |
+| `GUEST_in_HOST.csv` | Whether it fits, how much spills, and the placement (center and turn) |
 
 On Windows, `pack` and `nest` also ask the computer not to go to sleep until
 they finish, so they can run overnight.
@@ -394,6 +405,25 @@ New York (80.0%) don't. Neither does Hawaii (49.7%), because the guest is the
 whole state: the Northwestern Hawaiian Islands string it out over about 1,600
 miles.
 
+### Texas in Alaska
+
+Texas doesn't fit in Alaska: the biggest copy of it that does is 92.1% of its
+size. At its real size, though, it comes close. `spill TX AK` slides and
+turns it to spill off Alaska as little as possible:
+
+![Texas at full size on Alaska, turned to spill as little as possible: 99.7 percent of it lands on Alaska, and four small pieces in red spill off](docs/TX_in_AK_social.png)
+
+Turned 115.7° counterclockwise, 99.7% of Texas lands on Alaska. The 680
+square miles that don't are far West Texas near El Paso, dipping into Cook
+Inlet by Anchorage; a stretch of the Red River, jutting into Kotzebue Sound;
+Sabine Pass, poking into the Arctic Ocean; and the mouth of the Rio Grande,
+in the Beaufort Sea.
+
+That is a different spot from where the biggest copy fits. There, Texas at
+its real size spills 2,700 square miles, four times as much: the biggest
+copy is limited by its tightest squeeze, while the least spill counts every
+square mile that hangs off.
+
 ### How the nesting search works (`squares/nesting.py`)
 
 - **Moving a state.** On the ellipsoid nothing can slide perfectly rigidly,
@@ -429,16 +459,38 @@ miles.
   California. Carrying from one tangent plane to the next turns straight
   lines into straight lines, so a state that fits at home still fits after
   the move. On the map, every state lies exactly inside the one around it.
+- **Least spill.** `spill` uses the same sweep with the guest at its real
+  size, on a grid with a margin around the host so the guest can hang off
+  it, and takes the turns with the fewest stray pixels as starting points.
+  From each, Nelder–Mead moves the center and the turn to shrink the exact
+  spilled area, measured with shapely in the host's tangent plane; the image
+  reports it on the ellipsoid. A guest that fits spills nothing, and the
+  search stops there. Spilled pieces near each other count as one spill, and
+  each spill is named by where it sits in the guest at home, seen from the
+  guest's center ("western Texas").
 
 **Limits.** A state reported as fitting really fits, because its placement
 is checked exactly. A state reported as not fitting might still fit some
 cleverer way: the sweep tries every degree of turn and every slide on the
 grid, but the polishing is local. The scales of states that don't fit are
-the best found, so the true best scale is at least that much. As a check,
-all 20 near misses in the 50-state run (98% or more, bigger than the
-winner) were searched again more thoroughly, with turns every half degree
-and three times as many starting points. None of them fit, and no scale
-changed by more than a quarter of a percentage point.
+the best found, so the true best scale is at least that much (give or take
+the rounding below). As a check, all 20 near misses in the 50-state run
+(98% or more, bigger than the winner) were searched again more thoroughly,
+with turns every half degree and three times as many starting points. None
+of them fit, and no scale changed by more than a quarter of a percentage
+point. The least spill is likewise the least found, not a proven minimum.
+
+**Bigger isn't always worse.** The bisection on scale assumes that if a copy
+doesn't fit at some spot, no bigger copy there does either. Ragged coasts
+break that. At the spot where the biggest copy of Texas fits in Alaska,
+copies up to 91.7% of its size fit; from 91.7% to 91.9%, a sliver of the Red
+River pokes into Kotzebue Sound; and from 91.95% to 92.1% it fits again. So a scale is a size that was
+checked to fit, not a promise that every smaller copy at that spot fits, and
+the bisection can stop short of a bigger size beyond a gap. A guest
+reported as fitting is still checked directly at its real size. Separately,
+the CSVs round scales to 0.01%, which can round one up past the edge:
+Alaska's Texas is saved as 92.14%, but at that spot 92.1% fits and 92.14%
+doesn't.
 
 ## Design decisions
 
@@ -528,6 +580,13 @@ no room for callouts. Each step down a chain has its own shade, the same
 everywhere on the map, and each state is outlined in the next shade down. A
 first try with white outlines turned Maryland's ragged Chesapeake shore into
 white scribbles all over the map.
+
+The `spill` image is zoomed in on the host, so it has room for words.
+Each callout's text goes outward from the middle of the host, past the
+spill and clear of the host's land, and reaches away from the map. The
+map is framed to leave room for those two lines of text, and the legend
+sits in a row under the map, because a tall host like Delaware leaves no
+spare corner for it.
 
 ### Comparison GIF
 
@@ -689,7 +748,7 @@ squares/
   aligned.py         largest latitude/longitude-aligned box
   rotated.py         largest true square, rotated or facing north
   packing.py         17 (or any number of) equal squares packed into a state
-  nesting.py         the biggest other state that fits inside a state
+  nesting.py         one state inside another: the biggest that fits, the least spill
   draw.py            maps, social PNGs, comparison GIF and MP4, detail pages
   arrays.py          names for the NumPy array types used in type hints
 tests/               pytest suite (fully type-annotated too)
@@ -709,7 +768,7 @@ uv run pytest -m "not slow"    # skip the slow ones (real Census data, worker pr
 uv run mypy                    # strict type check of main.py, squares/ and tests/
 ```
 
-The suite has 179 tests:
+The suite has 197 tests:
 
 - **Formulas:** the ellipsoid formulas are checked against published WGS84
   values (quarter meridian, equator length, polar radius).
@@ -735,7 +794,10 @@ The suite has 179 tests:
   once one fits; a state inside another rides along, still inside, when
   the outer one is moved and turned; and the pages, the US maps and the
   chains can be rebuilt from the saved CSVs alone, each chain shaded darker
-  at each step.
+  at each step. The least-spill search spills nothing with a guest that can
+  fit, and lays a long guest that can't along its host. Tracing a moved
+  state back home gives its own outline, and a spill is named by the part
+  of the guest it comes from.
 - **Output:** the drawing and command-line code is tested end to end on
   made-up states, so those tests need no download.
 - **Real data:** tests marked `slow` pin down the published numbers for

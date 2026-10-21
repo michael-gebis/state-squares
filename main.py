@@ -20,6 +20,7 @@
     uv run main.py compare NM --close-up  # flip-book zoomed in on New Mexico
     uv run main.py pack WI --minutes 60 # 17 equal squares packed into Wisconsin
     uv run main.py nest CA              # the biggest other state that fits in California
+    uv run main.py spill TX AK          # full-size Texas on Alaska, and what spills off
 """
 
 import argparse
@@ -34,6 +35,7 @@ from typing import TypeAlias
 
 import numpy as np
 import shapely
+from shapely.geometry.base import BaseGeometry
 
 ROOT: Path = Path(__file__).resolve().parent
 sys.path.insert(0, str(ROOT))
@@ -753,6 +755,133 @@ def draw_nest_maps(out: Path, states: list[data.State]) -> list[Path]:
                                    NEST_CHAIN_TITLE, NEST_CHAIN_SUBTITLE, NEST_SOCIAL_CREDIT)]
 
 
+SPILL_CREDIT: str = ("US Census Bureau 2024 boundaries · shapes moved on the WGS84 ellipsoid · "
+                     "least spill found by a search")
+# Callouts: at most this many, for spills at least this big (square miles).
+SPILL_NOTES: int = 4
+SPILL_NOTE_MIN: float = 1.0
+
+
+def compass(dx: float, dy: float) -> str:
+    """The direction of (dx east, dy north) as a word for part of a state,
+    e.g. "western" or "northeastern"."""
+    words: list[str] = ["northern", "northeastern", "eastern", "southeastern", "southern",
+                        "southwestern", "western", "northwestern"]
+    bearing: float = float(np.degrees(np.arctan2(dx, dy))) % 360
+    return words[int((bearing + 22.5) // 45) % 8]
+
+
+def describe_area(area_sq_mi: float) -> str:
+    """An area in words, to two significant figures, e.g. "2,700 sq mi"."""
+    if area_sq_mi < 1:
+        return "under 1 sq mi"
+    return f"{float(f'{area_sq_mi:.2g}'):,.0f} sq mi"
+
+
+def geodesic_sq_mi(geom: BaseGeometry) -> float:
+    """A lon/lat geometry's area on the ellipsoid, square miles."""
+    return sq_mi(abs(float(geodesy.GEOD.geometry_area_perimeter(geom)[0])))
+
+
+def spill_notes(host: nesting.Outline, guest: nesting.Outline, place: nesting.Placement,
+                off: BaseGeometry) -> list[tuple[float, float, str]]:
+    """Callouts for the biggest spills, e.g. "340 sq mi of western Texas".
+    Pieces near each other (within 6% of the host's reach) count as one
+    spill, named by where they are in the guest at home."""
+    pieces: list[shapely.Polygon] = data.polygons(off)
+    if not pieces:
+        return []
+    flat: list[BaseGeometry] = [shapely.transform(p, host.plane.project) for p in pieces]
+    groups: list[shapely.Polygon] = data.polygons(
+        shapely.union_all([f.buffer(0.03 * host.reach) for f in flat]))
+    notes: list[tuple[float, float, str, float]] = []
+    for group in groups:
+        members: list[int] = [i for i, f in enumerate(flat) if group.intersects(f)]
+        areas: list[float] = [geodesic_sq_mi(pieces[i]) for i in members]
+        total: float = sum(areas)
+        if total < SPILL_NOTE_MIN:
+            continue
+        biggest: shapely.Polygon = pieces[members[int(np.argmax(areas))]]
+        spot: shapely.Point = biggest.representative_point()
+        # Where the spill is in the guest at home, from its center.
+        homes: list[shapely.Point] = [guest.home(place, pieces[i]).centroid for i in members]
+        x: float = sum(a * h.x for a, h in zip(areas, homes)) / total
+        y: float = sum(a * h.y for a, h in zip(areas, homes)) / total
+        where: str = "central" if np.hypot(x, y) < 0.3 * guest.reach else compass(x, y)
+        notes.append((spot.x, spot.y, f"{describe_area(total)} of\n{where} {guest.state.name}",
+                      total))
+    notes.sort(key=lambda n: -n[3])
+    return [(lon, lat, text) for lon, lat, text, _ in notes[:SPILL_NOTES]]
+
+
+def spill_captions(guest: data.State, host: data.State, fits: bool,
+                   pct_on: float, off_sq_mi: float) -> tuple[str, str, list[str]]:
+    """The title, subtitle and legend lines for a spill image."""
+    legend: list[str] = [f"{guest.name}, full size, on {host.name}"]
+    if fits:
+        return (f"{guest.name} fits inside {host.name}",
+                f"Slid and turned, never flipped or stretched, all of it lands on {host.name}.",
+                legend)
+    shown: str = f"{np.floor(pct_on * 10) / 10:.1f}%"  # never rounds up to 100%
+    pct_off: float = 100 - pct_on
+    legend.append(f"Spills off {host.name}: {describe_area(off_sq_mi)} "
+                  f"({f'{pct_off:.1f}%' if pct_off >= 0.1 else 'under 0.1%'})")
+    verdict: str = "almost fits" if pct_on >= 99 else "doesn't fit"
+    return (f"{guest.name} {verdict} inside {host.name}",
+            f"Slid and turned to spill as little as possible, {shown} of it lands on "
+            f"{host.name}. The red bits don't.", legend)
+
+
+def cmd_spill(args: argparse.Namespace) -> None:
+    """The `spill` command: one state at its real size on another, slid and
+    turned to spill off it as little as possible.  Saves a social-media PNG
+    with the spill in red and a callout for each big piece, and a CSV."""
+    states: list[data.State] = data.load_states(data.fetch(ROOT / "data"))
+    by_abbr: dict[str, data.State] = {s.abbr: s for s in states}
+    for abbr in (args.guest.upper(), args.host.upper()):
+        if abbr not in by_abbr:
+            sys.exit(f"unknown state abbreviation: {abbr}")
+    guest_state: data.State = by_abbr[args.guest.upper()]
+    host_state: data.State = by_abbr[args.host.upper()]
+    if guest_state is host_state:
+        sys.exit("the guest and the host must be different states")
+    out: Path = Path(args.out)
+    out.mkdir(parents=True, exist_ok=True)
+    print(f"{guest_state.name} on {host_state.name}: searching for the least spill", flush=True)
+    t0: float = time.perf_counter()
+    host: nesting.Outline = nesting.Outline(host_state)
+    guest: nesting.Outline = nesting.Outline(guest_state)
+    place: nesting.Placement = nesting.least_spill(host, guest)
+    seconds: float = time.perf_counter() - t0
+    shape: BaseGeometry = guest.moved(place)
+    fits: bool = nesting.fits(host, guest, place)
+    # A guest that fits can still leave hairline slivers in lon/lat, where
+    # the edges are drawn straight; the exact check above decides.
+    off: BaseGeometry = shapely.Polygon() if fits else shape.difference(host_state.geom)
+    off_sq_mi: float = geodesic_sq_mi(off)
+    pct_on: float = 100 * (1 - off_sq_mi / sq_mi(guest.area))
+    stem: str = f"{guest_state.abbr}_in_{host_state.abbr}"
+    write_csv(out / f"{stem}.csv", [{
+        "guest": guest_state.abbr, "guest_name": guest_state.name, "host": host_state.abbr,
+        "host_name": host_state.name, "fits": "yes" if fits else "no",
+        "spill_sq_mi": round(off_sq_mi, 1), "pct_of_guest_on_host": round(pct_on, 2),
+        "center_lat": place.lat, "center_lon": place.lon,  # full precision
+        "theta_rad": place.theta, "rotation_deg": round(place.rotation_deg(), 2),
+        "seconds": round(seconds, 1),
+    }])
+    print(f"{guest_state.name} on {host_state.name}: "
+          + ("fits" if fits else f"spills {off_sq_mi:,.0f} sq mi ({100 - pct_on:.2f}%)")
+          + f", {describe_turn(place.rotation_deg())}   {seconds:.0f}s")
+    title, subtitle, legend = spill_captions(guest_state, host_state, fits, pct_on, off_sq_mi)
+    notes: list[tuple[float, float, str]] = spill_notes(host, guest, place, off)
+    picture: draw.Spill = draw.Spill(host_state, guest_state, shape, off, notes)
+    credit: str = SPILL_CREDIT.replace("least spill", "placement") if fits else SPILL_CREDIT
+    png: Path = draw.draw_spill(picture, states, out / f"{stem}_social.png", title, subtitle,
+                                legend, credit)
+    print(f"wrote {out / f'{stem}.csv'}")
+    print(f"wrote {png}")
+
+
 def main() -> None:
     """Parse the command line and run the chosen command."""
     parser: argparse.ArgumentParser = argparse.ArgumentParser(
@@ -804,6 +933,12 @@ def main() -> None:
     nest.add_argument("--redraw", action="store_true",
                       help="don't search; redraw the pages and the US maps from saved results")
     nest.set_defaults(func=cmd_nest)
+    spill: argparse.ArgumentParser = sub.add_parser(
+        "spill", help="one state at its real size on another, placed to spill off it least")
+    spill.add_argument("guest", help="the state to move, e.g. TX")
+    spill.add_argument("host", help="the state to put it on, e.g. AK")
+    spill.add_argument("--out", default=str(ROOT / "out" / "spill"), help="output directory")
+    spill.set_defaults(func=cmd_spill)
     args: argparse.Namespace = parser.parse_args()
     args.func(args)
 
