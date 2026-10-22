@@ -7,6 +7,9 @@ project computes three versions for all 50 states and draws them as maps:
 
 ![The biggest square that fits in each state, free to rotate, with its side length in miles](docs/rotated_social.png)
 
+The pictures, with a short tour for non-programmers, are also at
+**[michael-gebis.github.io/state-squares](https://michael-gebis.github.io/state-squares/)**.
+
 | Command | What it finds |
 |---|---|
 | `aligned` | The largest box bounded by two **parallels and two meridians** (lines of latitude and longitude), sized so its height equals its width at its middle latitude. Not truly square: its north edge is shorter than its south edge. |
@@ -752,7 +755,8 @@ squares/
   draw.py            maps, social PNGs, comparison GIF and MP4, detail pages
   arrays.py          names for the NumPy array types used in type hints
 tests/               pytest suite (fully type-annotated too)
-docs/                images shown in this README
+docs/                the project's web page (index.md, _config.yml; built by GitHub Pages)
+                     and the images it and this README show
 pyproject.toml       project metadata, development tools, pytest and mypy settings
 ```
 

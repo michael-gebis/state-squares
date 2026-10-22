@@ -1,0 +1,14 @@
+# The project's GitHub Pages site, built by GitHub from this folder
+# (Settings > Pages > Deploy from a branch > main, /docs).
+title: State Squares
+description: >-
+  The biggest square in each US state, which states fit inside which, and
+  more, measured on the real shape of the Earth
+author: Michael Gebis
+lang: en-US
+theme: jekyll-theme-cayman
+plugins:
+  - jekyll-seo-tag
+# Links shared on social media show a large picture (see `image` in index.md).
+twitter:
+  card: summary_large_image
