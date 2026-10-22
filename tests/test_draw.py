@@ -402,3 +402,21 @@ def test_spill_image_names_both_states_and_calls_out_the_spill(tmp_path: Path) -
                                  ["On", "Off"], "C")
     with Image.open(path) as im:
         assert im.size == (2400, 1350)
+
+
+def test_spill_closeups_magnify_beside_the_map() -> None:
+    """With close-ups, each gets its own magnified panel with a numbered
+    caption, and the callouts are left off."""
+    wi, ri, ak, hi = SYNTHETIC_STATES
+    shape: BaseGeometry = rectangle(-92.0, 43.0, -88.0, 46.001)
+    spill: draw.Spill = draw.Spill(
+        wi, wi, shape, shape.difference(wi.geom), [(-90.0, 46.0, "a callout")],
+        [draw.Closeup(-91.5, 46.0, "North edge", "Hangs over by up to 110 m", 111.0),
+         draw.Closeup(-88.5, 46.0, "Northeast edge", "and by 100 m", 100.0)])
+    fig: Figure = draw._spill_figure(spill, SYNTHETIC_STATES, ["On", "Off"])
+    texts: list[str] = all_text(fig)
+    assert len(fig.axes) == 3
+    assert any(t.startswith("North edge, ") and t.endswith("× closer") for t in texts)
+    assert {"Hangs over by up to 110 m", "and by 100 m", "1", "2"} <= set(texts)
+    assert "a callout" not in texts
+    plt.close(fig)

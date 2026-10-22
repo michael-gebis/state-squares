@@ -80,15 +80,16 @@ Ocean; and the mouth of the Rio Grande.
 
 ## Why Wyoming doesn't fit inside Colorado
 
-[![Wyoming at full size on Colorado, with magnified views of the thin strips where it hangs over Colorado's north and south borders](WY_in_CO_explained.png)](WY_in_CO_explained.png)
+[![Wyoming at full size on Colorado, with magnified views of the thin strips where it hangs over Colorado's north and south borders](WY_in_CO_social.png)](WY_in_CO_social.png)
 
 Colorado is bigger and wider, but the two states are the same height:
 about 276 miles from north to south. Wherever Wyoming's borders reach a
 little farther apart than Colorado's, it hangs over, by up to 2,500 feet,
 and turning it only makes it taller. Shrunk to 99.7% of its size, it fits.
 
-On a perfectly smooth Earth, Wyoming would be about 1,000 feet taller,
-because a degree of latitude is a little longer the farther north you go.
+If their borders ran exactly along lines of latitude, Wyoming would be
+about 1,000 feet taller, because a degree of latitude is a little longer
+the farther north you go.
 But the surveyed borders wander north and south by up to about a mile,
 which cancels most of that.
 

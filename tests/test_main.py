@@ -281,3 +281,32 @@ def test_spill_notes_name_where_the_spill_comes_from(fake_states: list[data.Stat
     assert len(notes) == 1
     lon, lat, text = notes[0]
     assert text.endswith("of\nwestern Wisconsin") and -92.5 < lon < -92.0
+
+
+@pytest.mark.parametrize(("meters", "expected"), [
+    (762.0, "760 m (2,500 ft)"), (378.0, "380 m (1,200 ft)"), (1500.0, "1.5 km (0.93 mi)"),
+    (10496.0, "10 km (6.5 mi)")])
+def test_describe_length(meters: float, expected: str) -> None:
+    """Lengths are given to two significant figures, in both units."""
+    assert main.describe_length(meters) == expected
+
+
+def test_spill_closeups_only_for_spills_too_thin_to_see(fake_states: list[data.State]) -> None:
+    """Wisconsin nudged a hair north spills a strip about 110 m wide along
+    its northern edge, too thin to see, so it gets one close-up there; nudged
+    half a degree, the spill is plain to see and gets none; staying put
+    spills nothing."""
+    wi: data.State = next(s for s in fake_states if s.abbr == "WI")
+    host: nesting.Outline = nesting.Outline(wi)
+
+    def closeups(north: float) -> list[draw.Closeup]:
+        """The close-ups for Wisconsin moved `north` degrees."""
+        place: nesting.Placement = nesting.Placement(host.lon, host.lat + north, 0.0)
+        return main.spill_closeups(host, host, host.moved(place).difference(wi.geom))
+
+    thin: list[draw.Closeup] = closeups(0.001)
+    assert len(thin) == 1
+    assert thin[0].overhang == pytest.approx(111, abs=5)
+    assert thin[0].where.startswith("Wisconsin's north") and thin[0].lat > 45.9
+    assert thin[0].how_much == "Wisconsin hangs over by up to 110 m (360 ft)"
+    assert closeups(0.5) == [] and closeups(0.0) == []

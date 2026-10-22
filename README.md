@@ -115,7 +115,7 @@ Texas on Alaska and writes to `out/spill/`:
 
 | File | Contents |
 |---|---|
-| `GUEST_in_HOST_social.png` | A 2400×1350 image for social media: the guest where it lands on the host, the spill in red, and a callout for each of the biggest spills saying how big it is and which part of the guest it is ("350 sq mi of western Texas") |
+| `GUEST_in_HOST_social.png` | A 2400×1350 image for social media: the guest where it lands on the host, the spill in red, and a callout for each of the biggest spills saying how big it is and which part of the guest it is ("350 sq mi of western Texas"); or, if the spill is too thin to see on the map, magnified close-ups of it instead |
 | `GUEST_in_HOST.csv` | Whether it fits, how much spills, and the placement (center and turn) |
 
 On Windows, `pack` and `nest` also ask the computer not to go to sleep until
@@ -427,6 +427,23 @@ its real size spills 2,700 square miles, four times as much: the biggest
 copy is limited by its tightest squeeze, while the least spill counts every
 square mile that hangs off.
 
+### Wyoming in Colorado
+
+Colorado is bigger and wider than Wyoming, but the two are the same height,
+about 276 miles from north to south, and Wyoming doesn't quite fit. Its
+spill is only 51 square miles, in strips along Colorado's north and south
+borders up to 760 m (2,500 ft) wide. That is too thin to see on the map,
+so `spill WY CO` magnifies the two places it hangs over most:
+
+![Wyoming at full size on Colorado, with two magnified views of the thin strips where it hangs over Colorado's northwest corner and south border](docs/WY_in_CO_social.png)
+
+If their borders ran exactly along lines of latitude, Wyoming would be the
+taller, by 309 m: its four degrees of latitude (41° to 45°N) lie farther
+north than Colorado's (37° to 41°N), where a degree of latitude is a little
+longer. But the surveyed borders wander north and south by up to about a
+mile, which cancels most of that: the two states' median heights are
+within about 50 m. Shrunk to 99.7% of its size, Wyoming fits.
+
 ### How the nesting search works (`squares/nesting.py`)
 
 - **Moving a state.** On the ellipsoid nothing can slide perfectly rigidly,
@@ -470,7 +487,10 @@ square mile that hangs off.
   reports it on the ellipsoid. A guest that fits spills nothing, and the
   search stops there. Spilled pieces near each other count as one spill, and
   each spill is named by where it sits in the guest at home, seen from the
-  guest's center ("western Texas").
+  guest's center ("western Texas"). If even the farthest overhang is under
+  0.2% of the host's size (a pixel or two on the map), the image magnifies
+  the spot that hangs over farthest instead, and a second one at least a
+  quarter of the host away that hangs over at least a quarter as far.
 
 **Limits.** A state reported as fitting really fits, because its placement
 is checked exactly. A state reported as not fitting might still fit some
@@ -589,7 +609,10 @@ Each callout's text goes outward from the middle of the host, past the
 spill and clear of the host's land, and reaches away from the map. The
 map is framed to leave room for those two lines of text, and the legend
 sits in a row under the map, because a tall host like Delaware leaves no
-spare corner for it.
+spare corner for it. When the spill is too thin to see, the map moves to
+the left and two close-ups take the right, each in a box numbered to match
+one on the map, magnified so the farthest overhang is a fortieth of the
+close-up's width.
 
 ### Comparison GIF
 
@@ -772,7 +795,7 @@ uv run pytest -m "not slow"    # skip the slow ones (real Census data, worker pr
 uv run mypy                    # strict type check of main.py, squares/ and tests/
 ```
 
-The suite has 197 tests:
+The suite has 203 tests:
 
 - **Formulas:** the ellipsoid formulas are checked against published WGS84
   values (quarter meridian, equator length, polar radius).
@@ -801,7 +824,8 @@ The suite has 197 tests:
   at each step. The least-spill search spills nothing with a guest that can
   fit, and lays a long guest that can't along its host. Tracing a moved
   state back home gives its own outline, and a spill is named by the part
-  of the guest it comes from.
+  of the guest it comes from. Close-ups appear only for a spill too thin
+  to see, at the spot that hangs over farthest.
 - **Output:** the drawing and command-line code is tested end to end on
   made-up states, so those tests need no download.
 - **Real data:** tests marked `slow` pin down the published numbers for

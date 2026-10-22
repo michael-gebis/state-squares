@@ -760,6 +760,11 @@ SPILL_CREDIT: str = ("US Census Bureau 2024 boundaries · shapes moved on the WG
 # Callouts: at most this many, for spills at least this big (square miles).
 SPILL_NOTES: int = 4
 SPILL_NOTE_MIN: float = 1.0
+# A spill that nowhere hangs over by this share of the host's size is too
+# thin to see on the map, so up to this many spots are magnified instead.
+SPILL_THIN: float = 0.002
+SPILL_CLOSEUPS: int = 2
+METERS_PER_FOOT: float = 0.3048
 
 
 def compass(dx: float, dy: float) -> str:
@@ -814,6 +819,60 @@ def spill_notes(host: nesting.Outline, guest: nesting.Outline, place: nesting.Pl
     return [(lon, lat, text) for lon, lat, text, _ in notes[:SPILL_NOTES]]
 
 
+def describe_length(meters: float) -> str:
+    """A length in words, to two significant figures in metric and US units,
+    e.g. "760 m (2,500 ft)" or "1.5 km (0.93 mi)"."""
+
+    def round2(x: float) -> float:
+        """x to two significant figures."""
+        return float(f"{x:.2g}")
+
+    if meters < 1000:
+        return f"{round2(meters):,.0f} m ({round2(meters / METERS_PER_FOOT):,.0f} ft)"
+    return f"{round2(meters / 1000):g} km ({round2(meters / geodesy.METERS_PER_MILE):g} mi)"
+
+
+def spill_closeups(host: nesting.Outline, guest: nesting.Outline,
+                   off: BaseGeometry) -> list[draw.Closeup]:
+    """Spots to magnify when even the farthest overhang is too thin to see on
+    the map (under SPILL_THIN of the host's size): where the guest hangs over
+    farthest, then the next farthest at least a quarter of the host away and
+    hanging over at least a quarter as far, up to SPILL_CLOSEUPS.  Empty when
+    the spill is big enough to see."""
+    pieces: list[shapely.Polygon] = data.polygons(off)
+    if not pieces:
+        return []
+    minx, miny, maxx, maxy = host.flat.bounds
+    size: float = max(maxx - minx, maxy - miny)
+    spots: list[tuple[float, float, float]] = []  # (overhang, x, y) in the host's plane
+    for piece in pieces:
+        pts: FloatArray = shapely.get_coordinates(shapely.transform(piece, host.plane.project))
+        overhang: FloatArray = np.asarray(shapely.distance(shapely.points(pts), host.flat))
+        i: int = int(np.argmax(overhang))
+        # Slivers under a meter are where edges drawn straight in lon/lat
+        # and in the plane part ways, not real spill.
+        if overhang[i] >= 1.0:
+            spots.append((float(overhang[i]), float(pts[i, 0]), float(pts[i, 1])))
+    spots.sort(reverse=True)
+    if not spots or spots[0][0] >= SPILL_THIN * size:
+        return []
+    chosen: list[tuple[float, float, float]] = []
+    for over, x, y in spots:
+        if over < 0.25 * spots[0][0]:
+            break  # no stray slivers
+        if all(np.hypot(x - cx, y - cy) > 0.25 * size for _, cx, cy in chosen):
+            chosen.append((over, x, y))
+        if len(chosen) == SPILL_CLOSEUPS:
+            break
+    closeups: list[draw.Closeup] = []
+    for over, x, y in chosen:
+        lon, lat = host.plane.lonlat(x, y)  # the host's center is the plane's origin
+        closeups.append(draw.Closeup(
+            lon, lat, f"{host.state.name}'s {compass(x, y)} edge",
+            f"{guest.state.name} hangs over by up to {describe_length(over)}", over))
+    return closeups
+
+
 def spill_captions(guest: data.State, host: data.State, fits: bool,
                    pct_on: float, off_sq_mi: float) -> tuple[str, str, list[str]]:
     """The title, subtitle and legend lines for a spill image."""
@@ -835,7 +894,8 @@ def spill_captions(guest: data.State, host: data.State, fits: bool,
 def cmd_spill(args: argparse.Namespace) -> None:
     """The `spill` command: one state at its real size on another, slid and
     turned to spill off it as little as possible.  Saves a social-media PNG
-    with the spill in red and a callout for each big piece, and a CSV."""
+    with the spill in red and a callout for each big piece (or, if the spill
+    is too thin to see, magnified close-ups of it), and a CSV."""
     states: list[data.State] = data.load_states(data.fetch(ROOT / "data"))
     by_abbr: dict[str, data.State] = {s.abbr: s for s in states}
     for abbr in (args.guest.upper(), args.host.upper()):
@@ -874,7 +934,8 @@ def cmd_spill(args: argparse.Namespace) -> None:
           + f", {describe_turn(place.rotation_deg())}   {seconds:.0f}s")
     title, subtitle, legend = spill_captions(guest_state, host_state, fits, pct_on, off_sq_mi)
     notes: list[tuple[float, float, str]] = spill_notes(host, guest, place, off)
-    picture: draw.Spill = draw.Spill(host_state, guest_state, shape, off, notes)
+    closeups: list[draw.Closeup] = spill_closeups(host, guest, off)
+    picture: draw.Spill = draw.Spill(host_state, guest_state, shape, off, notes, closeups)
     credit: str = SPILL_CREDIT.replace("least spill", "placement") if fits else SPILL_CREDIT
     png: Path = draw.draw_spill(picture, states, out / f"{stem}_social.png", title, subtitle,
                                 legend, credit)

@@ -5,7 +5,8 @@ from __future__ import annotations
 import io
 import subprocess
 import tempfile
-from dataclasses import dataclass, replace
+from collections.abc import Callable
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, TypeAlias
 
@@ -21,7 +22,7 @@ from matplotlib.axes import Axes  # noqa: E402
 from matplotlib.backends.backend_pdf import PdfPages  # noqa: E402
 from matplotlib.colors import to_hex, to_rgb  # noqa: E402
 from matplotlib.figure import Figure  # noqa: E402
-from matplotlib.patches import Patch  # noqa: E402
+from matplotlib.patches import Patch, Rectangle  # noqa: E402
 from matplotlib.text import Annotation, Text  # noqa: E402
 from PIL import Image  # noqa: E402
 from pyproj import Transformer  # noqa: E402
@@ -483,6 +484,18 @@ SPILL_EDGE: str = "#7f1010"
 
 
 @dataclass(frozen=True)
+class Closeup:
+    """A spot to magnify on a spill image, where the guest hangs over the
+    host by too little to see on the map."""
+
+    lon: float
+    lat: float
+    where: str  # e.g. "Colorado's northwestern edge"
+    how_much: str  # e.g. "Wyoming hangs over by up to 760 m (2,500 ft)"
+    overhang: float  # how far the guest hangs over there, meters
+
+
+@dataclass(frozen=True)
 class Spill:
     """One state at its real size on another, and the parts of it that
     spill off, for a social-media image."""
@@ -492,6 +505,19 @@ class Spill:
     shape: BaseGeometry  # the guest moved into place, lon/lat
     off: BaseGeometry  # the parts of it that spill off the host, lon/lat (maybe empty)
     notes: list[tuple[float, float, str]]  # callouts: (lon, lat of a spill, text)
+    # Magnified views, shown instead of the callouts when the spill is too thin to see.
+    closeups: list[Closeup] = field(default_factory=list)
+
+
+# Where the map goes on a spill image: across the whole width, or on the
+# left when close-ups take the right.  Close-ups go one above the other,
+# each with a caption above it.
+SPILL_MAP: Rect = (0.0, 0.11, 1.0, 0.72)
+SPILL_MAP_BESIDE: Rect = (0.0, 0.11, 0.5, 0.72)
+CLOSEUPS: list[Rect] = [(0.53, 0.505, 0.455, 0.235), (0.53, 0.13, 0.455, 0.235)]
+# A close-up is this many times as wide as the farthest overhang it shows.
+CLOSEUP_WIDTH: float = 40.0
+NUMBER: dict[str, Any] = {"boxstyle": "circle,pad=0.3", "fc": INK, "ec": "none"}
 
 
 def _name_size(name: str, room: float, scale: float, biggest: float) -> float:
@@ -503,26 +529,33 @@ def _name_size(name: str, room: float, scale: float, biggest: float) -> float:
 
 def _spill_figure(sp: Spill, states: list[State], legend: list[str]) -> Figure:
     """The host and its neighbors, the guest at its real size filled in where
-    it lands on the host and in red where it spills off, both named, with a
-    callout for each note and, in a row under the map, a legend (an entry for
-    the guest, and one for the spill if any).  Titles are left to the caller."""
+    it lands on the host and in red where it spills off, both named, and,
+    in a row under the map, a legend (an entry for the guest, and one for
+    the spill if any).  Each note gets a callout; or, if there are close-ups,
+    the map moves to the left and they are magnified on the right instead.
+    Titles are left to the caller."""
     proj: _Proj = _state_proj(sp.host)
     fig: Figure = plt.figure(figsize=SOCIAL_STYLE.figsize, dpi=SOCIAL_STYLE.dpi)
-    ax: Axes = fig.add_axes((0.0, 0.11, 1.0, 0.72))  # the legend goes below
+    ax: Axes = fig.add_axes(SPILL_MAP_BESIDE if sp.closeups else SPILL_MAP)
     ax.set_axis_off()
-    for other in _nearby(sp.host, states):
-        _add(ax, proj.geom(other.geom), facecolor=NEIGHBOR, edgecolor=NEIGHBOR_EDGE,
-             linewidth=0.5)
+    neighbors: list[BaseGeometry] = [proj.geom(o.geom) for o in _nearby(sp.host, states)]
     host: BaseGeometry = proj.geom(_display_geom(sp.host))
-    _add(ax, host, facecolor=LAND, edgecolor=LAND_EDGE, linewidth=0.7)
     guest: BaseGeometry = proj.geom(sp.shape)
-    _add(ax, proj.geom(sp.shape.difference(sp.off)), facecolor=SQUARE, edgecolor="none",
-         alpha=0.85)
-    _add(ax, proj.geom(sp.off), facecolor=SPILL, edgecolor=SPILL_EDGE, linewidth=0.6)
-    for poly in polygons(guest):
-        ring: FloatArray = np.asarray(poly.exterior.coords)
-        ax.plot(ring[:, 0], ring[:, 1], color=SQUARE_EDGE, lw=0.9)
+    on: BaseGeometry = proj.geom(sp.shape.difference(sp.off))
+    off: BaseGeometry = proj.geom(sp.off)
 
+    def paint(target: Axes) -> None:
+        """Draw the neighbors, the host, the guest where it lands, and the spill."""
+        for other in neighbors:
+            _add(target, other, facecolor=NEIGHBOR, edgecolor=NEIGHBOR_EDGE, linewidth=0.5)
+        _add(target, host, facecolor=LAND, edgecolor=LAND_EDGE, linewidth=0.7)
+        _add(target, on, facecolor=SQUARE, edgecolor="none", alpha=0.85)
+        _add(target, off, facecolor=SPILL, edgecolor=SPILL_EDGE, linewidth=0.6)
+        for poly in polygons(guest):
+            ring: FloatArray = np.asarray(poly.exterior.coords)
+            target.plot(ring[:, 0], ring[:, 1], color=SQUARE_EDGE, lw=0.9)
+
+    paint(ax)
     # Each callout's text goes out from the host's middle, past its spill,
     # far enough to be clear of the host's land.
     middle, _ = _deepest(host)
@@ -530,7 +563,7 @@ def _spill_figure(sp: Spill, states: list[State], legend: list[str]) -> Figure:
     extent: float = max(bounds[2] - bounds[0], bounds[3] - bounds[1])
     # (spill, text tip, text alignment left/right, bottom/center/top, text)
     callouts: list[tuple[FloatArray, FloatArray, str, str, str]] = []
-    for lon, lat, text in sp.notes:
+    for lon, lat, text in [] if sp.closeups else sp.notes:
         spot: FloatArray = proj.xy([lon, lat])[0]
         out: FloatArray = spot - np.array([middle.x, middle.y])
         out = out / max(float(np.hypot(*out)), 1.0)
@@ -583,6 +616,8 @@ def _spill_figure(sp: Spill, states: list[State], legend: list[str]) -> Figure:
         if size >= 9:
             ax.text(where.x, where.y, name.upper(), ha="center", va="center", fontsize=size,
                     weight="bold", color=color, alpha=0.8)
+    if sp.closeups:
+        _closeups(fig, ax, proj, sp.closeups, paint)
 
     handles: list[Patch] = [Patch(facecolor=SQUARE, edgecolor=SQUARE_EDGE, alpha=0.85,
                                   label=legend[0])]
@@ -592,6 +627,41 @@ def _spill_figure(sp: Spill, states: list[State], legend: list[str]) -> Figure:
                ncol=len(handles), fontsize=12, frameon=False, handlelength=1.6,
                handleheight=1.1, columnspacing=2.5)
     return fig
+
+
+def _closeups(fig: Figure, main: Axes, proj: _Proj, closeups: list[Closeup],
+              paint: Callable[[Axes], None]) -> None:
+    """Magnify each close-up (at most two) on the right of a spill image,
+    framed and numbered to match a box on the main map, with a caption
+    above it saying where it is, how much closer, and how far the guest
+    hangs over.  All are drawn at the same scale, wide enough to show the
+    farthest overhang clearly."""
+    width: float = CLOSEUP_WIDTH * max(c.overhang for c in closeups)
+    for number, (c, rect) in enumerate(zip(closeups, CLOSEUPS), start=1):
+        ax: Axes = fig.add_axes(rect)
+        ax.set_xticks([])
+        ax.set_yticks([])
+        for side in ax.spines.values():
+            side.set_color(INK)
+            side.set_linewidth(0.8)
+        paint(ax)
+        x, y = proj.xy([c.lon, c.lat])[0]
+        height: float = width * rect[3] * fig.get_figheight() / (rect[2] * fig.get_figwidth())
+        ax.set_xlim(x - width / 2, x + width / 2)
+        ax.set_ylim(y - height / 2, y + height / 2)
+        ax.set_aspect("equal")
+        _scale_bar(ax, 0.08 * height, fontsize=10)
+        zoom: float = _pts_per_meter(ax) / _pts_per_meter(main)
+        top: float = rect[1] + rect[3] + 0.015
+        fig.text(rect[0] + 0.008, top + 0.022, str(number), ha="center", va="center",
+                 fontsize=11, weight="bold", color="white", bbox=NUMBER)
+        fig.text(rect[0] + 0.03, top + 0.035, f"{c.where}, {zoom:.0f}× closer", fontsize=11.5,
+                 weight="bold", color=INK, va="center")
+        fig.text(rect[0] + 0.03, top + 0.008, c.how_much, fontsize=11.5, color=INK, va="center")
+        main.add_patch(Rectangle((x - width / 2, y - height / 2), width, height, fill=False,
+                                 edgecolor=INK, lw=1.2, zorder=5))
+        main.text(x + 0.8 * width, y, str(number), ha="left", va="center", fontsize=11,
+                  weight="bold", color="white", bbox=NUMBER, zorder=6)
 
 
 def draw_spill(sp: Spill, states: list[State], path: Path, title: str, subtitle: str,
