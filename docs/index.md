@@ -48,9 +48,11 @@ surveyed borders decide where the very best one goes.
 
 [![17 equal squares, 73.7 miles on a side, packed into New Mexico, three of them tilted 45 degrees](NM_17_squares.png)](NM_17_squares.png)
 
-Sixteen equal squares pack neatly into a bigger square. The best known way
-to fit seventeen is a lopsided jumble that went viral in 2021 as "ugly
-math". Here is the same puzzle for a state: an hour's search packed 17
+Sixteen equal squares pack neatly into a bigger square.
+[The best known way to fit seventeen](https://en.wikipedia.org/wiki/Square_packing#In_a_square)
+is a lopsided jumble that went viral in 2021, and again in 2023, as
+["ugly math"](https://knowyourmeme.com/memes/17-squares-in-a-larger-square).
+Here is the same puzzle for a state: an hour's search packed 17
 squares, each 73.7 miles on a side, into New Mexico. That beats the 71.4
 miles you'd get by shrinking the famous jumble to fit New Mexico's biggest
 square.

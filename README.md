@@ -185,9 +185,12 @@ bigger). So the post's squares are north-facing true squares.
 
 ## Packing 17 squares
 
-Sixteen equal squares pack neatly into a bigger square as a 4×4 grid. The
-best known way to fit seventeen is a lopsided jumble of tilted squares that
-went viral in 2021 as an "ugly math" meme: it needs a container of side
+Sixteen equal squares pack neatly into a bigger square as a 4×4 grid.
+[The best known way to fit seventeen](https://en.wikipedia.org/wiki/Square_packing#In_a_square)
+is a lopsided jumble of tilted squares that went viral in 2021, and again
+in 2023, as an
+["ugly math" meme](https://knowyourmeme.com/memes/17-squares-in-a-larger-square):
+it needs a container of side
 4.6756 (found by John Bidwell in the late 1990s), and nobody has proven that
 it can't be beaten. The `pack` command asks the same question of a state:
 **how big can 17 equal squares be and still all fit inside?**
