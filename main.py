@@ -764,6 +764,9 @@ SPILL_NOTE_MIN: float = 1.0
 # thin to see on the map, so up to this many spots are magnified instead.
 SPILL_THIN: float = 0.002
 SPILL_CLOSEUPS: int = 2
+# A thin spill's overhang is measured this often along its edges (degrees,
+# about 20 m).
+SPILL_STEP: float = 0.0002
 METERS_PER_FOOT: float = 0.3048
 
 
@@ -844,16 +847,26 @@ def spill_closeups(host: nesting.Outline, guest: nesting.Outline,
         return []
     minx, miny, maxx, maxy = host.flat.bounds
     size: float = max(maxx - minx, maxy - miny)
-    spots: list[tuple[float, float, float]] = []  # (overhang, x, y) in the host's plane
-    for piece in pieces:
+
+    def farthest(piece: BaseGeometry) -> tuple[float, float, float]:
+        """How far a lon/lat piece hangs over, and where: (overhang, x, y)
+        in the host's plane, checked at its vertices."""
         pts: FloatArray = shapely.get_coordinates(shapely.transform(piece, host.plane.project))
         overhang: FloatArray = np.asarray(shapely.distance(shapely.points(pts), host.flat))
         i: int = int(np.argmax(overhang))
-        # Slivers under a meter are where edges drawn straight in lon/lat
-        # and in the plane part ways, not real spill.
-        if overhang[i] >= 1.0:
-            spots.append((float(overhang[i]), float(pts[i, 0]), float(pts[i, 1])))
-    spots.sort(reverse=True)
+        return float(overhang[i]), float(pts[i, 0]), float(pts[i, 1])
+
+    # The vertices are enough to show a spill is big enough to see.  A thin
+    # one can hang over farthest between them, where a straight edge crosses
+    # a bend in the host's border, so it is checked every SPILL_STEP along
+    # the edges, which are straight in lon/lat.
+    if max(farthest(p)[0] for p in pieces) >= SPILL_THIN * size:
+        return []
+    spots: list[tuple[float, float, float]] = sorted(
+        (farthest(shapely.segmentize(p, SPILL_STEP)) for p in pieces), reverse=True)
+    # Slivers under a meter are where edges drawn straight in lon/lat and in
+    # the plane part ways, not real spill.
+    spots = [s for s in spots if s[0] >= 1.0]
     if not spots or spots[0][0] >= SPILL_THIN * size:
         return []
     chosen: list[tuple[float, float, float]] = []

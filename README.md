@@ -444,6 +444,62 @@ longer. But the surveyed borders wander north and south by up to about a
 mile, which cancels most of that: the two states' median heights are
 within about 50 m. Shrunk to 99.7% of its size, Wyoming fits.
 
+### Indiana in Iowa
+
+Indiana is the closest call of all: the biggest copy of it that fits in
+Iowa is 99.96% of its size. Iowa is more than half again as big, but
+Indiana is long. From its southwestern tip in Posey County to its
+northeastern corner in Steuben County it is 324 miles, and Iowa is at most
+314 miles from east to west, so Indiana has to lie on a slant. `spill IN
+IA` turns it 95° clockwise, its Ohio River side facing the Missouri and its
+Michigan line facing the Mississippi, and lays it corner to corner across
+Iowa:
+
+![Indiana at full size on Iowa, turned on its side, with magnified views of where it hangs over the Missouri and the Mississippi](docs/IN_in_IA_social.png)
+
+There it touches Iowa's border in four places:
+
+- **Posey County**, Indiana's southwestern tip, reaches the Minnesota line
+  in Lyon County, Iowa's northwestern corner, and pokes over by 23 m (75 ft).
+- **Harrison County, Indiana**, on the Ohio River, lands on Harrison
+  County, Iowa, on the Missouri, and hangs over into Nebraska by 94 m
+  (310 ft).
+- **The Michigan line**, in LaGrange County, crosses the Mississippi in
+  Louisa County, Iowa, and hangs over into Illinois by 65 m (210 ft).
+- **Steuben County**, Indiana's northeastern corner, just touches the
+  Mississippi in Lee County, Iowa's southeastern corner.
+
+All told, about 15 acres spill, the size of 11 football fields. Shrunk to
+99.95% of its size, Indiana fits.
+
+### Rhode Island in Delaware
+
+Delaware is nearly twice the size of Rhode Island, but it is narrow. It is
+35 miles across at most, near its southern end, and Delaware Bay pares it
+down going north, to 23 miles at Milford and 18 at Dover. Rhode Island is
+38 miles across and 49 miles from its northern border to Watch Hill, with
+Block Island another 9 miles out to sea. `spill RI DE` sets it in
+Delaware's wide southern end, turned 3.4° counterclockwise:
+
+![Rhode Island at full size on Delaware, with its southwestern corner, its northeastern towns and Block Island spilling off in red](docs/RI_in_DE_social.png)
+
+93.0% of Rhode Island lands on Delaware. The 77 square miles that don't:
+
+- **Most of Westerly** and part of Charlestown (36 sq mi), in Rhode Island's
+  southwestern corner, hang off Delaware's southwestern corner into
+  Maryland, by up to 5.9 miles.
+- **Parts of Cumberland, Pawtucket, East Providence, Barrington and
+  Warren** (28 sq mi), in the northeast, land in Delaware Bay. Rhode Island
+  reaches nearly as far north as Dover, where Delaware is down to 18 miles
+  across.
+- **Block Island** (11 sq mi) lands in Maryland, 15 miles south of
+  Delaware.
+- **A strip along the Connecticut line**, in Burrillville and Glocester
+  (2 sq mi), crosses Delaware's western border into Maryland.
+
+Leaving out the islands doesn't help: as noted above, Rhode Island's
+mainland alone reaches only 94.7%.
+
 ### How the nesting search works (`squares/nesting.py`)
 
 - **Moving a state.** On the ellipsoid nothing can slide perfectly rigidly,
@@ -487,10 +543,11 @@ within about 50 m. Shrunk to 99.7% of its size, Wyoming fits.
   reports it on the ellipsoid. A guest that fits spills nothing, and the
   search stops there. Spilled pieces near each other count as one spill, and
   each spill is named by where it sits in the guest at home, seen from the
-  guest's center ("western Texas"). If even the farthest overhang is under
-  0.2% of the host's size (a pixel or two on the map), the image magnifies
-  the spot that hangs over farthest instead, and a second one at least a
-  quarter of the host away that hangs over at least a quarter as far.
+  guest's center ("western Texas"). If even the farthest overhang, checked
+  every 0.0002° (about 20 m) along the spill's edges, is under 0.2% of the
+  host's size (a pixel or two on the map), the image magnifies the spot
+  that hangs over farthest instead, and a second one at least a quarter of
+  the host away that hangs over at least a quarter as far.
 
 **Limits.** A state reported as fitting really fits, because its placement
 is checked exactly. A state reported as not fitting might still fit some
@@ -795,7 +852,7 @@ uv run pytest -m "not slow"    # skip the slow ones (real Census data, worker pr
 uv run mypy                    # strict type check of main.py, squares/ and tests/
 ```
 
-The suite has 203 tests:
+The suite has 204 tests:
 
 - **Formulas:** the ellipsoid formulas are checked against published WGS84
   values (quarter meridian, equator length, polar radius).
@@ -825,7 +882,8 @@ The suite has 203 tests:
   fit, and lays a long guest that can't along its host. Tracing a moved
   state back home gives its own outline, and a spill is named by the part
   of the guest it comes from. Close-ups appear only for a spill too thin
-  to see, at the spot that hangs over farthest.
+  to see, at the spot that hangs over farthest, even when that is between
+  the outline's vertices.
 - **Output:** the drawing and command-line code is tested end to end on
   made-up states, so those tests need no download.
 - **Real data:** tests marked `slow` pin down the published numbers for

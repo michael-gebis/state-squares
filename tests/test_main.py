@@ -310,3 +310,18 @@ def test_spill_closeups_only_for_spills_too_thin_to_see(fake_states: list[data.S
     assert thin[0].where.startswith("Wisconsin's north") and thin[0].lat > 45.9
     assert thin[0].how_much == "Wisconsin hangs over by up to 110 m (360 ft)"
     assert closeups(0.5) == [] and closeups(0.0) == []
+
+
+def test_spill_closeups_measure_between_vertices() -> None:
+    """A straight edge laid across a notch in the host's border hangs over
+    it most in the middle, where it has no vertex: here about 215 m, over a
+    notch 0.002 degrees deep and 0.02 degrees wide."""
+    notched: shapely.Polygon = shapely.Polygon([
+        (-100, 40), (-98, 40), (-98, 41), (-98.99, 41), (-99, 40.998), (-99.01, 41), (-100, 41)])
+    host: nesting.Outline = nesting.Outline(data.State("NL", "Notchland", notched))
+    across: shapely.Polygon = shapely.Polygon([(-99.01, 41), (-99, 40.998), (-98.99, 41)])
+    found: list[draw.Closeup] = main.spill_closeups(host, host, across)
+    assert len(found) == 1
+    assert found[0].overhang == pytest.approx(215, abs=5)
+    assert found[0].lon == pytest.approx(-99, abs=0.001)
+    assert found[0].where == "Notchland's northern edge"

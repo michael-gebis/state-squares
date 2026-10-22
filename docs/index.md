@@ -93,6 +93,31 @@ the farther north you go.
 But the surveyed borders wander north and south by up to about a mile,
 which cancels most of that.
 
+## The closest call: Indiana in Iowa
+
+[![Indiana at full size on Iowa, turned on its side, with magnified views of where it hangs over the Missouri and the Mississippi](IN_in_IA_social.png)](IN_in_IA_social.png)
+
+Iowa is more than half again as big as Indiana, but Indiana is long: 324
+miles from its southwestern tip to its northeastern corner, and Iowa is at
+most 314 miles wide. So Indiana lies on a slant, corner to corner, and
+touches Iowa's border in four places. Harrison County, Indiana, lands on
+Harrison County, Iowa, and hangs over the Missouri into Nebraska by 310
+feet. The Michigan line hangs over the Mississippi into Illinois by 210
+feet. All told, about 15 acres spill. Shrunk to 99.95% of its size,
+Indiana fits.
+
+## Why Delaware holds nothing
+
+[![Rhode Island at full size on Delaware, with its southwestern corner, its northeastern towns and Block Island spilling off in red](RI_in_DE_social.png)](RI_in_DE_social.png)
+
+Delaware is nearly twice the size of Rhode Island, but it is only 35 miles
+across at most, near its southern end, and Delaware Bay narrows it to 18
+miles by Dover. Rhode Island is 38 miles across and 49 miles tall, with
+Block Island 9 miles out to sea. Turned to spill as little as possible,
+93.0% of it lands on Delaware. Most of Westerly hangs off Delaware's
+southwestern corner into Maryland. Cumberland, Pawtucket and the East Bay towns land in
+Delaware Bay. Block Island lands in Maryland, 15 miles south of Delaware.
+
 ## How it's done
 
 - **Boundaries:** the Census Bureau's 2024 cartographic boundary files
