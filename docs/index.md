@@ -98,9 +98,10 @@ and turning it only makes it taller. Shrunk to 99.7% of its size, it fits.
 
 If their borders ran exactly along lines of latitude, Wyoming would be
 about 1,000 feet taller, because a degree of latitude is a little longer
-the farther north you go.
-But the surveyed borders wander north and south by up to about a mile,
-which cancels most of that.
+the farther north you go. But the surveyed borders wander north and south
+by up to about a mile, which cancels most of that. Big Think explains why
+[Colorado is not a rectangle](https://bigthink.com/strange-maps/colorado-is-not-a-rectangle/):
+its borders are where the surveyors put them, mistakes and all.
 
 ## The closest call: Indiana in Iowa
 

@@ -453,7 +453,10 @@ taller, by 309 m: its four degrees of latitude (41° to 45°N) lie farther
 north than Colorado's (37° to 41°N), where a degree of latitude is a little
 longer. But the surveyed borders wander north and south by up to about a
 mile, which cancels most of that: the two states' median heights are
-within about 50 m. Shrunk to 99.7% of its size, Wyoming fits.
+within about 50 m. Shrunk to 99.7% of its size, Wyoming fits. Big Think
+explains why
+[Colorado is not a rectangle](https://bigthink.com/strange-maps/colorado-is-not-a-rectangle/):
+its borders are where the surveyors put them, mistakes and all.
 
 ### Indiana in Iowa
 
