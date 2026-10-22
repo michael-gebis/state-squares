@@ -1,9 +1,14 @@
 # Largest squares in US states
 
-What is the largest square that fits inside each US state? It sounds like a
-simple question, but on a curved Earth "square" can mean several different
-things, and the answers differ by as much as 46 miles (in Alaska). This
-project computes three versions for all 50 states and draws them as maps:
+What is the largest square that fits inside each US state? This project
+started with a [Terrible Maps post](https://www.instagram.com/p/Dem9hvVARHC/)
+on Instagram showing the biggest square in each of the lower 48 states,
+none of them turned, and a hunch: if the squares could turn, some states
+would fit bigger ones. They do: turned, 22 states' squares grow by a mile
+or more, and Texas's by 17. But on a curved Earth "square" can mean
+several different things, and the answers differ by as much as 46 miles
+(in Alaska). The project computes three versions for all 50 states and
+draws them as maps:
 
 ![The biggest square that fits in each state, free to rotate, with its side length in miles](docs/rotated_social.png)
 
@@ -139,6 +144,10 @@ Rotation is counterclockwise from north.
 | West Virginia | 91.6 (90.7 / 92.4) | 91.5 | 105.3 (−43.4°) |
 | Rhode Island | 20.5 (20.5 / 20.6) | 20.5 | 20.6 (1.4°) |
 
+Facing north, New Mexico has the biggest square in the lower 48, as in the
+[Terrible Maps post](https://www.instagram.com/p/Dem9hvVARHC/). Turned
+43.6°, Texas's square grows by 17 miles and overtakes it.
+
 ### Why the aligned box can beat a true square
 
 Freedom to rotate can only help, so `rotated` is always at least as big as
@@ -153,9 +162,10 @@ as true squares.
 
 ### The Wisconsin "158 miles" puzzle
 
-This project started from someone else's informal claim that the largest
-aligned square in Wisconsin is about 158 miles. The aligned box here is 156.3,
-and no reasonable variant of the aligned box reproduces 158:
+The [Terrible Maps post](https://www.instagram.com/p/Dem9hvVARHC/) gives
+Wisconsin's biggest square as 158 miles, and the first question was what
+kind of square that is. The aligned box here is 156.3, and no reasonable
+variant of the aligned box reproduces 158:
 
 | Variant | Wisconsin (mi) |
 |---|---|
@@ -168,9 +178,10 @@ and no reasonable variant of the aligned box reproduces 158:
 | Flat square in Web Mercator, measured in map units | 219.8 |
 | **True square facing north (`north`)** | **157.7** |
 
-The north-facing true square rounds to 158, so that is most likely what the
-original computation measured, perhaps without its author realizing it differs
-from a latitude/longitude box.
+The north-facing true square rounds to 158, and the post's other numbers
+match the north-facing squares too: 31 of its 48 round to the same mile,
+and all but California's are within 1.5 miles (California's is 2 miles
+bigger). So the post's squares are north-facing true squares.
 
 ## Packing 17 squares
 
@@ -924,6 +935,8 @@ the branch-and-bound borrows only polylabel's *idea*, not its code.
 
 ## Credits
 
+- The question: a [Terrible Maps post](https://www.instagram.com/p/Dem9hvVARHC/)
+  on Instagram showing the biggest square in each of the lower 48 states.
 - Boundaries: US Census Bureau, cartographic boundary files (public domain).
 - Search strategy inspired by Mapbox's
   [polylabel](https://github.com/mapbox/polylabel).

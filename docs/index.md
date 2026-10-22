@@ -10,6 +10,12 @@ WGS84 ellipsoid), using the Census Bureau's state boundaries. The code, the
 method and every number are on
 [GitHub](https://github.com/michael-gebis/state-squares).
 
+It all started with a
+[Terrible Maps post](https://www.instagram.com/p/Dem9hvVARHC/) on Instagram
+showing the biggest square in each of the lower 48 states, none of them
+turned. If a square could turn, wouldn't some states fit a bigger one? They
+would: 22 states' squares grow by a mile or more.
+
 Click any picture for the full-size version.
 
 ## The biggest square in each state
@@ -26,7 +32,10 @@ one, to within a few tens of feet.
 [![Animation flipping between the biggest north-facing square and the biggest square free to turn, in every state](north_vs_rotated.gif)](north_vs_rotated.gif)
 
 Squares that must face north, then squares free to turn. Darker squares
-gain more by turning: Texas's grows by 17 miles when it turns 43.6°.
+gain more by turning: Texas's grows by 17 miles when it turns 43.6°, to
+341.8 miles. That overtakes New Mexico's 333.9: facing north, as in the
+post, New Mexico has the biggest square in the lower 48, but turned, Texas
+does.
 
 [![Animation flipping between Colorado's biggest north-facing square, at the west end of the state, and its biggest turned square, 94 miles farther east](CO_north_vs_rotated.gif)](CO_north_vs_rotated.gif)
 
